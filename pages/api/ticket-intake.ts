@@ -61,7 +61,11 @@ export default async function handler(
        Same condo
        Status NOT closed
     ========================= */
-    const { data: openTickets } = await supabase
+    const { data: openTickets, error: fetchError } = await supabase
+  if (fetchError) {
+  console.error("SUPABASE FETCH ERROR:", fetchError);
+  throw fetchError;
+  }
       .from("tickets")
       .select("id, description_clean")
      .eq("condo_id", condo_id)
@@ -119,7 +123,11 @@ export default async function handler(
       duplicate_score: duplicateScore,
     });
 
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
+} catch (err: any) {
+  console.error("TICKET INTAKE ERROR:", err);
+  return res.status(500).json({
+    error: "Internal Server Error",
+    detail: err?.message || err?.toString() || "unknown error"
+  });
+}
 }
