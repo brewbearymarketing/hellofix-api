@@ -64,8 +64,10 @@ export default async function handler(
     const { data: openTickets } = await supabase
       .from("tickets")
       .select("id, description_clean")
-      .eq("condo_id", condo_id)
-      .not("status", "in", '("completed","cancelled")');
+     .eq("condo_id", condo_id)
+  .neq("status", "completed")
+  .neq("status", "cancelled");
+
 
     let duplicateOf: string | null = null;
     let duplicateScore: number | null = null;
