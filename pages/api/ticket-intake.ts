@@ -60,6 +60,15 @@ export default async function handler(
       });
     }
 
+      /* =====================================================
+      🔍 DEBUG: CHECK OPENAI KEY AVAILABILITY
+      THIS IS THE KEY LINE YOU ASKED FOR
+      ===================================================== */
+    console.log(
+      "OPENAI_API_KEY exists:",
+      !!process.env.OPENAI_API_KEY
+    );
+
     /* -------------------------------------------------
        2️⃣ Duplicate detection (BEST-EFFORT)
     -------------------------------------------------- */
