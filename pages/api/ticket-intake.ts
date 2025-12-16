@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Supabase client (SERVICE ROLE)
+   Supabase client
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,7 +11,7 @@ const supabase = createClient(
 );
 
 /* =====================================================
-   OpenAI client (optional, never blocks)
+   OpenAI client (optional)
 ===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -24,11 +24,7 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  /* -----------------------------------------------
-     ROUTE GUARD
-  ------------------------------------------------ */
   if (req.method !== "POST") {
-    console.log("ℹ️ Non-POST request received");
     return res.status(200).json({
       ok: true,
       message: "Ticket intake reached",
@@ -37,14 +33,7 @@ export default async function handler(
   }
 
   try {
-    console.log("🚀 === TICKET INTAKE START ===");
-
-    console.log("📦 Raw body:", req.body);
-    console.log("🔑 ENV CHECK:", {
-      SUPABASE_URL: !!process.env.SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-      OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
-    });
+    console.log("🚀 Ticket intake start");
 
     const body =
       typeof req.body === "string"
@@ -54,17 +43,14 @@ export default async function handler(
     const { condo_id, description_raw } = body;
 
     if (!condo_id || !description_raw) {
-      console.log("❌ Missing required fields", body);
       return res.status(400).json({
         error: "Missing condo_id or description_raw",
       });
     }
 
     /* -------------------------------------------------
-       1️⃣ INSERT TICKET (ALWAYS)
+       1️⃣ Insert ticket
     -------------------------------------------------- */
-    console.log("📝 Inserting ticket into Supabase...");
-
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
@@ -80,7 +66,6 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      console.error("❌ Ticket insert failed", insertError);
       return res.status(500).json({
         error: insertError?.message || "Ticket insert failed",
       });
@@ -89,25 +74,23 @@ export default async function handler(
     console.log("✅ Ticket inserted:", ticket.id);
 
     /* -------------------------------------------------
-       2️⃣ EMBEDDING (BEST EFFORT, NEVER BLOCKS)
+       2️⃣ Create embedding (BEST EFFORT)
     -------------------------------------------------- */
+    let embedding: number[] | null = null;
+
     if (!openai) {
-      console.log("⚠️ OpenAI disabled — embedding skipped");
+      console.log("⚠️ OpenAI disabled");
     } else {
       try {
-        console.log("🧠 Creating embedding...");
-
         const embeddingResponse = await openai.embeddings.create({
           model: "text-embedding-3-small",
           input: description_raw,
         });
 
-        const embedding = embeddingResponse.data?.[0]?.embedding;
+        embedding = embeddingResponse.data?.[0]?.embedding ?? null;
 
-        if (!embedding) {
-          console.log("⚠️ No embedding returned from OpenAI");
-        } else {
-          console.log("📐 Embedding length:", embedding.length);
+        if (embedding) {
+          console.log("📐 Embedding created:", embedding.length);
 
           await supabase
             .from("tickets")
@@ -115,57 +98,55 @@ export default async function handler(
               embedding: embedding as unknown as number[],
             })
             .eq("id", ticket.id);
-
-          console.log("💾 Embedding saved");
         }
       } catch (err) {
-        console.error("⚠️ Embedding failed (non-blocking):", err);
+        console.error("⚠️ Embedding failed:", err);
       }
     }
 
-    console.log("🏁 === TICKET INTAKE COMPLETE ===");
+    /* -------------------------------------------------
+       3️⃣ Duplicate detection (ONLY if embedding exists)
+    -------------------------------------------------- */
+    let duplicateOf: string | null = null;
 
-     /* -------------------------------------------------
-   3️⃣ DUPLICATE CHECK
--------------------------------------------------- */
-let duplicateOf: string | null = null;
+    if (embedding) {
+      const { data: matches, error: matchError } =
+        await supabase.rpc("match_tickets", {
+          query_embedding: embedding,
+          match_threshold: 0.9,
+          match_count: 1,
+          condo_filter: condo_id,
+          exclude_id: ticket.id,
+        });
 
-const { data: matches, error: matchError } = await supabase.rpc(
-  "match_tickets",
-  {
-    query_embedding: embedding,
-    match_threshold: 0.9,
-    match_count: 1,
-    condo_filter: condo_id,
-    exclude_id: ticket.id,
-  }
-);
+      if (matchError) {
+        console.error("❌ match_tickets error:", matchError);
+      } else if (matches && matches.length > 0) {
+        duplicateOf = matches[0].id;
 
-if (matchError) {
-  console.error("❌ match_tickets error", matchError);
-} else if (matches && matches.length > 0) {
-  duplicateOf = matches[0].id;
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: true,
+            duplicate_of: duplicateOf,
+          })
+          .eq("id", ticket.id);
 
-  await supabase
-    .from("tickets")
-    .update({
-      is_duplicate: true,
-      duplicate_of: duplicateOf,
-    })
-    .eq("id", ticket.id);
-
-  console.log("🔁 Duplicate detected:", duplicateOf);
-}
+        console.log("🔁 Duplicate detected:", duplicateOf);
+      }
+    }
 
     /* -------------------------------------------------
-       3️⃣ RESPONSE
+       4️⃣ Response
     -------------------------------------------------- */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
+      is_duplicate: !!duplicateOf,
+      duplicate_of: duplicateOf,
     });
   } catch (err: any) {
-    console.error("🔥 UNCAUGHT ERROR", err);
+    console.error("🔥 Uncaught error:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message,
