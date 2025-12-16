@@ -1,49 +1,53 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({
+      error: "Missing Supabase env vars",
+      supabaseUrlExists: !!supabaseUrl,
+      serviceKeyExists: !!serviceKey,
+    });
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey);
+
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
-    }
+    const testPayload = {
+      condo_id: "b7f6c1a8-1b23-4a5e-9d7a-12e34abc5678",
+      description_raw: "FORCED DEBUG INSERT",
+      description_clean: "FORCED DEBUG INSERT",
+      source: "debug",
+      status: "new",
+      is_common_area: false,
+    };
 
-    const { condo_id, description_raw } = req.body;
-
-    if (!condo_id || !description_raw) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
-
-    const { error } = await supabase
+    const result = await supabase
       .from("tickets")
-      .insert({
-        condo_id,
-        description_raw,
-        description_clean: description_raw,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: false,
-      });
+      .insert(testPayload)
+      .select()
+      .single();
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    if (result.error) {
+      throw result.error;
     }
 
     return res.status(200).json({
       success: true,
-      message: "Ticket created",
+      inserted_row: result.data,
     });
+
   } catch (err: any) {
     return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message,
+      error: "SUPABASE INSERT FAILED",
+      message: err.message,
+      details: err,
     });
   }
 }
