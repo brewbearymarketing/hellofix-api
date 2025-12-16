@@ -89,4 +89,4 @@ export default async function handler(
 
     console.log("✅ Ticket inserted:", ticket.id);
 
-    /* --------------------------*
+    /* --------------------------*/
