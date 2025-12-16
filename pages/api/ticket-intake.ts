@@ -9,8 +9,11 @@ const newEmbedding = embeddingResponse.data[0].embedding;
 /* 3️⃣ STORE EMBEDDING */
 await supabase
   .from("tickets")
-  .update({ embedding: newEmbedding })
+  .update({
+    embedding: embedding as unknown as number[],
+  })
   .eq("id", ticket.id);
+
 
 /* 4️⃣ FIND MOST SIMILAR OPEN TICKET */
 const { data: similarTickets } = await supabase.rpc(
