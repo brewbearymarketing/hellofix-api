@@ -125,6 +125,38 @@ export default async function handler(
 
     console.log("🏁 === TICKET INTAKE COMPLETE ===");
 
+     /* -------------------------------------------------
+   3️⃣ DUPLICATE CHECK
+-------------------------------------------------- */
+let duplicateOf: string | null = null;
+
+const { data: matches, error: matchError } = await supabase.rpc(
+  "match_tickets",
+  {
+    query_embedding: embedding,
+    match_threshold: 0.9,
+    match_count: 1,
+    condo_filter: condo_id,
+    exclude_id: ticket.id,
+  }
+);
+
+if (matchError) {
+  console.error("❌ match_tickets error", matchError);
+} else if (matches && matches.length > 0) {
+  duplicateOf = matches[0].id;
+
+  await supabase
+    .from("tickets")
+    .update({
+      is_duplicate: true,
+      duplicate_of: duplicateOf,
+    })
+    .eq("id", ticket.id);
+
+  console.log("🔁 Duplicate detected:", duplicateOf);
+}
+
     /* -------------------------------------------------
        3️⃣ RESPONSE
     -------------------------------------------------- */
