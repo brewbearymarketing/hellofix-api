@@ -1,33 +1,94 @@
-/* ===== Duplicate check (NON-FATAL) ===== */
-let duplicateOf: string | null = null;
-let duplicateScore: number | null = null;
+import type { NextApiRequest, NextApiResponse } from "next";
+import { createClient } from "@supabase/supabase-js";
 
-try {
-  const validTickets = (openTickets || []).filter(
-    t =>
-      typeof t.description_clean === "string" &&
-      t.description_clean.length > 0
-  );
+/* =====================================================
+   ENV CHECK (FAIL FAST, CLEAR ERROR)
+===================================================== */
+const {
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  MAKE_WEBHOOK_SECRET,
+} = process.env;
 
-  if (validTickets.length > 0) {
-    const texts = validTickets.map(t => t.description_clean);
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !MAKE_WEBHOOK_SECRET) {
+  throw new Error("Missing required environment variables");
+}
 
-    if (texts.length > 0) {
-      const existingEmbeddings = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: texts,
-      });
+const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
+);
 
-      existingEmbeddings.data.forEach((item, index) => {
-        const score = cosineSimilarity(newVector, item.embedding);
-        if (score >= 0.88 && (!duplicateScore || score > duplicateScore)) {
-          duplicateScore = score;
-          duplicateOf = validTickets[index].id;
-        }
+/* =====================================================
+   API HANDLER (BASELINE)
+===================================================== */
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  try {
+    /* ---------- METHOD ---------- */
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    /* ---------- AUTH ---------- */
+    const secret = req.headers["x-make-secret"];
+    if (secret !== MAKE_WEBHOOK_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    /* ---------- BODY VALIDATION ---------- */
+    if (!req.body || typeof req.body !== "object") {
+      return res.status(400).json({ error: "Invalid JSON body" });
+    }
+
+    const { condo_id, description_raw } = req.body;
+
+    if (!condo_id || !description_raw) {
+      return res.status(400).json({
+        error: "Missing required fields: condo_id, description_raw",
       });
     }
+
+    /* ---------- CLEAN TEXT ---------- */
+    const description_clean = String(description_raw)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 2000);
+
+    /* ---------- INSERT ONLY ---------- */
+    const { data, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "new",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Supabase insert error:", error);
+      return res.status(500).json({
+        error: "Database insert failed",
+        detail: error.message,
+      });
+    }
+
+    /* ---------- SUCCESS ---------- */
+    return res.status(200).json({
+      ticket_id: data.id,
+      message: "Ticket created successfully",
+    });
+
+  } catch (err: any) {
+    console.error("Ticket intake fatal error:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err?.message ?? "Unknown error",
+    });
   }
-} catch (err) {
-  console.error("Duplicate check skipped due to error:", err);
-  // IMPORTANT: do NOT throw
 }
