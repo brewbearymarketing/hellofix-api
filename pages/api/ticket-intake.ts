@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Supabase client
+   Supabase client (SERVICE ROLE)
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,7 +11,7 @@ const supabase = createClient(
 );
 
 /* =====================================================
-   OpenAI client (optional)
+   OpenAI client (optional, never blocks)
 ===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -24,7 +24,11 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  /* -----------------------------------------------
+     ROUTE GUARD
+  ------------------------------------------------ */
   if (req.method !== "POST") {
+    console.log("ℹ️ Non-POST request received");
     return res.status(200).json({
       ok: true,
       message: "Ticket intake reached",
@@ -33,7 +37,7 @@ export default async function handler(
   }
 
   try {
-    console.log("🚀 Ticket intake start");
+    console.log("🚀 === TICKET INTAKE START ===");
 
     const body =
       typeof req.body === "string"
@@ -43,14 +47,17 @@ export default async function handler(
     const { condo_id, description_raw } = body;
 
     if (!condo_id || !description_raw) {
+      console.log("❌ Missing required fields", body);
       return res.status(400).json({
         error: "Missing condo_id or description_raw",
       });
     }
 
     /* -------------------------------------------------
-       1️⃣ Insert ticket
+       1️⃣ INSERT TICKET (ALWAYS FIRST)
     -------------------------------------------------- */
+    console.log("📝 Inserting ticket...");
+
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
@@ -66,6 +73,7 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
+      console.error("❌ Ticket insert failed", insertError);
       return res.status(500).json({
         error: insertError?.message || "Ticket insert failed",
       });
@@ -74,14 +82,16 @@ export default async function handler(
     console.log("✅ Ticket inserted:", ticket.id);
 
     /* -------------------------------------------------
-       2️⃣ Create embedding (BEST EFFORT)
+       2️⃣ CREATE EMBEDDING (BEST EFFORT)
     -------------------------------------------------- */
     let embedding: number[] | null = null;
 
     if (!openai) {
-      console.log("⚠️ OpenAI disabled");
+      console.log("⚠️ OpenAI disabled (no API key)");
     } else {
       try {
+        console.log("🧠 Creating embedding...");
+
         const embeddingResponse = await openai.embeddings.create({
           model: "text-embedding-3-small",
           input: description_raw,
@@ -100,44 +110,58 @@ export default async function handler(
             .eq("id", ticket.id);
         }
       } catch (err) {
-        console.error("⚠️ Embedding failed:", err);
+        console.error("⚠️ Embedding failed (ignored):", err);
       }
     }
 
     /* -------------------------------------------------
-       3️⃣ Duplicate detection (ONLY if embedding exists)
+       3️⃣ DUPLICATE DETECTION (OLDER TICKETS ONLY)
     -------------------------------------------------- */
     let duplicateOf: string | null = null;
 
     if (embedding) {
+      console.log("🔍 Checking for duplicates...");
+
       const { data: matches, error: matchError } =
         await supabase.rpc("match_tickets", {
           query_embedding: embedding,
-          match_threshold: 0.9,
-          match_count: 1,
           condo_filter: condo_id,
           exclude_id: ticket.id,
+          created_before: ticket.created_at, // 🔑 CRITICAL FIX
+          match_threshold: 0.85,
+          match_count: 1,
         });
 
       if (matchError) {
         console.error("❌ match_tickets error:", matchError);
       } else if (matches && matches.length > 0) {
-        duplicateOf = matches[0].id;
+        const bestMatch = matches[0];
 
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: true,
-            duplicate_of: duplicateOf,
-          })
-          .eq("id", ticket.id);
+        console.log(
+          "🧠 Similarity:",
+          bestMatch.similarity
+        );
 
-        console.log("🔁 Duplicate detected:", duplicateOf);
+        if (bestMatch.similarity >= 0.85) {
+          duplicateOf = bestMatch.id;
+
+          await supabase
+            .from("tickets")
+            .update({
+              is_duplicate: true,
+              duplicate_of: duplicateOf,
+            })
+            .eq("id", ticket.id);
+
+          console.log("🔁 Duplicate detected:", duplicateOf);
+        }
+      } else {
+        console.log("✅ No duplicate found");
       }
     }
 
     /* -------------------------------------------------
-       4️⃣ Response
+       4️⃣ RESPONSE
     -------------------------------------------------- */
     return res.status(200).json({
       success: true,
