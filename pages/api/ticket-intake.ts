@@ -56,13 +56,7 @@ async function extractUnitIdFromText(
     return { unit_id: null, unit_label: null };
   }
 
-  const {
-    min_floor,
-    max_floor,
-    min_unit,
-    max_unit,
-    format,
-  } = rules;
+  const { min_floor, max_floor, min_unit, max_unit, format } = rules;
 
   const aIsFloor = a >= min_floor && a <= max_floor;
   const bIsUnit = b >= min_unit && b <= max_unit;
@@ -143,9 +137,7 @@ export default async function handler(
       });
     }
 
-    /* -------------------------------------------------
-       1️⃣ ALWAYS attempt unit extraction
-    -------------------------------------------------- */
+    /* 1️⃣ UNIT EXTRACTION */
     console.log("🏠 Attempting unit extraction...");
 
     const unitResult = await extractUnitIdFromText(
@@ -161,9 +153,7 @@ export default async function handler(
       unit_label,
     });
 
-    /* -------------------------------------------------
-       2️⃣ Insert ticket
-    -------------------------------------------------- */
+    /* 2️⃣ INSERT TICKET */
     console.log("📝 Inserting ticket...");
 
     const { data: ticket, error: insertError } = await supabase
@@ -190,9 +180,7 @@ export default async function handler(
 
     console.log("✅ Ticket inserted:", ticket.id);
 
-    /* -------------------------------------------------
-       3️⃣ Create embedding
-    -------------------------------------------------- */
+    /* 3️⃣ EMBEDDING */
     let embedding: number[] | null = null;
 
     if (openai) {
@@ -206,3 +194,79 @@ export default async function handler(
       embedding = emb.data[0].embedding;
 
       console.log("📐 Embedding created:", embedding.length);
+
+      await supabase
+        .from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
+    }
+
+    /* 4️⃣ DUPLICATE CHECK */
+    let duplicateOf: string | null = null;
+    let relatedTo: string | null = null;
+
+    if (embedding) {
+      console.log("🔍 Running duplicate search…");
+
+      const { data: matches } = await supabase.rpc(
+        "match_tickets",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          exclude_id: ticket.id,
+          created_before: ticket.created_at,
+          match_threshold: 0.9,
+          match_count: 1,
+        }
+      );
+
+      console.log("🧪 match_tickets result:", matches);
+
+      if (matches && matches.length > 0) {
+        const best = matches[0];
+
+        if (ticket.is_common_area || best.is_common_area) {
+          duplicateOf = best.id;
+        } else if (
+          ticket.unit_id &&
+          best.unit_id &&
+          ticket.unit_id === best.unit_id
+        ) {
+          duplicateOf = best.id;
+        } else {
+          relatedTo = best.id;
+        }
+
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: !!duplicateOf,
+            duplicate_of: duplicateOf,
+            related_to: relatedTo,
+          })
+          .eq("id", ticket.id);
+
+        console.log("🔁 DUPLICATE / RELATED RESOLVED");
+      } else {
+        console.log("✅ No duplicate found");
+      }
+    }
+
+    /* 5️⃣ RESPONSE */
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
+      unit_label,
+      unit_id,
+      is_duplicate: !!duplicateOf,
+      duplicate_of: duplicateOf,
+      related_to: relatedTo,
+    });
+  } catch (err: any) {
+    console.error("🔥 Uncaught error", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message,
+    });
+  }
+}
