@@ -18,7 +18,7 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   UNIT EXTRACTION (RULE-BASED, SAFE)
+   UNIT EXTRACTION (ALWAYS RUNS)
 ===================================================== */
 async function extractUnitIdFromText(
   condo_id: string,
@@ -26,7 +26,6 @@ async function extractUnitIdFromText(
 ): Promise<{ unit_id: string | null; unit_label: string | null }> {
   console.log("🧪 RAW TEXT:", text);
 
-  // Matches: A-12-3, Block A 12-3, A12-3
   const match = text.match(
     /(block\s*)?([A-Z])\s*[-\/]?\s*(\d{1,2})\s*[-\/]?\s*(\d{1,2})/i
   );
@@ -44,7 +43,6 @@ async function extractUnitIdFromText(
 
   console.log("🧪 PARSED NUMBERS:", { a, b });
 
-  // Load condo rules
   const { data: rules } = await supabase
     .from("condo_unit_rules")
     .select("*")
@@ -88,7 +86,6 @@ async function extractUnitIdFromText(
 
   console.log("✅ NORMALIZED UNIT:", unit_label);
 
-  // Resolve or create unit
   const { data: unit } = await supabase
     .from("units")
     .select("id")
@@ -138,11 +135,7 @@ export default async function handler(
         ? JSON.parse(req.body)
         : req.body;
 
-    const {
-      condo_id,
-      description_raw,
-      is_common_area,
-    } = body;
+    const { condo_id, description_raw, is_common_area } = body;
 
     if (!condo_id || !description_raw) {
       return res.status(400).json({
@@ -151,20 +144,22 @@ export default async function handler(
     }
 
     /* -------------------------------------------------
-       1️⃣ Resolve unit (IMPORTANT FIX HERE)
+       1️⃣ ALWAYS attempt unit extraction
     -------------------------------------------------- */
-    let unit_id: string | null = null;
-    let unit_label: string | null = null;
+    console.log("🏠 Attempting unit extraction...");
 
-    // ✅ FIX: treat undefined as NOT common area
-    if (is_common_area !== true) {
-      const result = await extractUnitIdFromText(
-        condo_id,
-        description_raw
-      );
-      unit_id = result.unit_id;
-      unit_label = result.unit_label;
-    }
+    const unitResult = await extractUnitIdFromText(
+      condo_id,
+      description_raw
+    );
+
+    const unit_id = unitResult.unit_id;
+    const unit_label = unitResult.unit_label;
+
+    console.log("🏠 Unit extraction result:", {
+      unit_id,
+      unit_label,
+    });
 
     /* -------------------------------------------------
        2️⃣ Insert ticket
@@ -211,83 +206,3 @@ export default async function handler(
       embedding = emb.data[0].embedding;
 
       console.log("📐 Embedding created:", embedding.length);
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-    }
-
-    /* -------------------------------------------------
-       4️⃣ Duplicate / related logic
-    -------------------------------------------------- */
-    let duplicateOf: string | null = null;
-    let relatedTo: string | null = null;
-
-    if (embedding) {
-      console.log("🔍 Running duplicate search…");
-
-      const { data: matches } = await supabase.rpc(
-        "match_tickets",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          exclude_id: ticket.id,
-          created_before: ticket.created_at,
-          match_threshold: 0.9,
-          match_count: 1,
-        }
-      );
-
-      console.log("🧪 match_tickets result:", matches);
-
-      if (matches && matches.length > 0) {
-        const best = matches[0];
-
-        if (ticket.is_common_area || best.is_common_area) {
-          duplicateOf = best.id;
-        } else if (
-          ticket.unit_id &&
-          best.unit_id &&
-          ticket.unit_id === best.unit_id
-        ) {
-          duplicateOf = best.id;
-        } else {
-          relatedTo = best.id;
-        }
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicateOf,
-            duplicate_of: duplicateOf,
-            related_to: relatedTo,
-          })
-          .eq("id", ticket.id);
-
-        console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf ?? "RELATED");
-      } else {
-        console.log("✅ No duplicate found");
-      }
-    }
-
-    /* -------------------------------------------------
-       5️⃣ Response
-    -------------------------------------------------- */
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      unit_label,
-      unit_id,
-      is_duplicate: !!duplicateOf,
-      duplicate_of: duplicateOf,
-      related_to: relatedTo,
-    });
-  } catch (err: any) {
-    console.error("🔥 Uncaught error", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message,
-    });
-  }
-}
