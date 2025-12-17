@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Supabase client
+   Supabase client (SERVICE ROLE)
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,85 +11,89 @@ const supabase = createClient(
 );
 
 /* =====================================================
-   OpenAI client
+   OpenAI client (optional)
 ===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
 /* =====================================================
-   UNIT EXTRACTION (ALWAYS RUNS)
+   UNIT EXTRACTION (RULE-BASED, PRODUCTION SAFE)
 ===================================================== */
 async function extractUnitIdFromText(
   condo_id: string,
   text: string
 ): Promise<{ unit_id: string | null; unit_label: string | null }> {
+
   console.log("🧪 RAW TEXT:", text);
 
-  const match = text.match(
-    /(block\s*)?([A-Z])\s*[-\/]?\s*(\d{1,2})\s*[-\/]?\s*(\d{1,2})/i
-  );
+  // Matches: A-12-3, Block A 12-3, A12-3
+  const regex =
+    /(block\s*)?([A-Z])\s*[-]?\s*(\d{1,2})\s*[-]?\s*(\d{1,2})/i;
 
+  const match = text.match(regex);
   console.log("🧪 REGEX MATCH:", match);
 
   if (!match) {
-    console.warn("⚠️ NO UNIT PATTERN FOUND");
+    console.log("⚠️ No unit pattern detected");
     return { unit_id: null, unit_label: null };
   }
 
   const block = match[2].toUpperCase();
-  const a = parseInt(match[3], 10);
-  const b = parseInt(match[4], 10);
+  const num1 = parseInt(match[3], 10);
+  const num2 = parseInt(match[4], 10);
 
-  console.log("🧪 PARSED NUMBERS:", { a, b });
+  console.log("🧪 PARSED NUMBERS:", { block, num1, num2 });
 
-  const { data: rules } = await supabase
+  // Load condo rules
+  const { data: rules, error } = await supabase
     .from("condo_unit_rules")
     .select("*")
     .eq("condo_id", condo_id)
     .single();
 
-  console.log("🧪 RULES FOUND:", rules);
-
-  if (!rules) {
-    console.warn("⚠️ NO CONDO RULES FOUND");
+  if (error || !rules) {
+    console.warn("⚠️ No condo rules found");
     return { unit_id: null, unit_label: null };
   }
 
-  const { min_floor, max_floor, min_unit, max_unit, format } = rules;
+  const {
+    min_floor,
+    max_floor,
+    min_unit,
+    max_unit,
+    format,
+  } = rules;
 
-  const aIsFloor = a >= min_floor && a <= max_floor;
-  const bIsUnit = b >= min_unit && b <= max_unit;
-  const bIsFloor = b >= min_floor && b <= max_floor;
-  const aIsUnit = a >= min_unit && a <= max_unit;
+  const num1IsFloor = num1 >= min_floor && num1 <= max_floor;
+  const num2IsUnit = num2 >= min_unit && num2 <= max_unit;
 
   let unit_label: string | null = null;
 
-  if (format === "BLOCK-FLOOR-UNIT" && aIsFloor && bIsUnit) {
-    unit_label = `${block}-${a}-${b}`;
-  } else if (format === "BLOCK-UNIT-FLOOR" && aIsUnit && bIsFloor) {
-    unit_label = `${block}-${b}-${a}`;
-  } else if (aIsFloor && bIsUnit && !(aIsUnit && bIsFloor)) {
-    unit_label = `${block}-${a}-${b}`;
-  } else if (bIsFloor && aIsUnit && !(bIsUnit && aIsFloor)) {
-    unit_label = `${block}-${b}-${a}`;
+  // BLOCK-FLOOR-UNIT (A-12-3)
+  if (format === "BLOCK-FLOOR-UNIT" && num1IsFloor && num2IsUnit) {
+    unit_label = `${block}-${num1}-${num2}`;
   } else {
-    console.warn("⚠️ UNIT AMBIGUOUS – NOT ASSIGNED", { a, b, rules });
+    console.warn("⚠️ UNIT AMBIGUOUS – NOT AUTO ASSIGNED", {
+      block,
+      num1,
+      num2,
+    });
     return { unit_id: null, unit_label: null };
   }
 
   console.log("✅ NORMALIZED UNIT:", unit_label);
 
-  const { data: unit } = await supabase
+  // Resolve or create unit
+  const { data: existingUnit } = await supabase
     .from("units")
     .select("id")
     .eq("condo_id", condo_id)
     .eq("unit_label", unit_label)
     .single();
 
-  if (unit) {
-    console.log("✅ EXISTING UNIT FOUND:", unit.id);
-    return { unit_id: unit.id, unit_label };
+  if (existingUnit) {
+    return { unit_id: existingUnit.id, unit_label };
   }
 
   const { data: newUnit } = await supabase
@@ -97,8 +101,6 @@ async function extractUnitIdFromText(
     .insert({ condo_id, unit_label })
     .select()
     .single();
-
-  console.log("🆕 NEW UNIT CREATED:", newUnit?.id);
 
   return {
     unit_id: newUnit?.id ?? null,
@@ -113,6 +115,7 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  // Allow GET for health check
   if (req.method !== "POST") {
     return res.status(200).json({
       ok: true,
@@ -129,7 +132,11 @@ export default async function handler(
         ? JSON.parse(req.body)
         : req.body;
 
-    const { condo_id, description_raw, is_common_area } = body;
+    const {
+      condo_id,
+      description_raw,
+      is_common_area = false,
+    } = body;
 
     if (!condo_id || !description_raw) {
       return res.status(400).json({
@@ -137,23 +144,24 @@ export default async function handler(
       });
     }
 
-    /* 1️⃣ UNIT EXTRACTION */
-    console.log("🏠 Attempting unit extraction...");
+    /* -------------------------------------------------
+       1️⃣ Resolve unit (rule-based)
+    -------------------------------------------------- */
+    let unit_id: string | null = null;
+    let unit_label: string | null = null;
 
-    const unitResult = await extractUnitIdFromText(
-      condo_id,
-      description_raw
-    );
+    if (!is_common_area) {
+      const result = await extractUnitIdFromText(
+        condo_id,
+        description_raw
+      );
+      unit_id = result.unit_id;
+      unit_label = result.unit_label;
+    }
 
-    const unit_id = unitResult.unit_id;
-    const unit_label = unitResult.unit_label;
-
-    console.log("🏠 Unit extraction result:", {
-      unit_id,
-      unit_label,
-    });
-
-    /* 2️⃣ INSERT TICKET */
+    /* -------------------------------------------------
+       2️⃣ Insert ticket (ALWAYS)
+    -------------------------------------------------- */
     console.log("📝 Inserting ticket...");
 
     const { data: ticket, error: insertError } = await supabase
@@ -165,7 +173,7 @@ export default async function handler(
         description_clean: description_raw,
         source: "whatsapp",
         status: "new",
-        is_common_area: is_common_area === true,
+        is_common_area,
         is_duplicate: false,
       })
       .select()
@@ -180,12 +188,13 @@ export default async function handler(
 
     console.log("✅ Ticket inserted:", ticket.id);
 
-    /* 3️⃣ EMBEDDING */
+    /* -------------------------------------------------
+       3️⃣ Create embedding (BEST EFFORT)
+    -------------------------------------------------- */
     let embedding: number[] | null = null;
 
     if (openai) {
       console.log("🧠 Creating embedding...");
-
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_raw,
@@ -201,7 +210,9 @@ export default async function handler(
         .eq("id", ticket.id);
     }
 
-    /* 4️⃣ DUPLICATE CHECK */
+    /* -------------------------------------------------
+       4️⃣ Duplicate / Related detection
+    -------------------------------------------------- */
     let duplicateOf: string | null = null;
     let relatedTo: string | null = null;
 
@@ -215,7 +226,7 @@ export default async function handler(
           condo_filter: condo_id,
           exclude_id: ticket.id,
           created_before: ticket.created_at,
-          match_threshold: 0.9,
+          match_threshold: 0.85,
           match_count: 1,
         }
       );
@@ -246,13 +257,15 @@ export default async function handler(
           })
           .eq("id", ticket.id);
 
-        console.log("🔁 DUPLICATE / RELATED RESOLVED");
+        console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
       } else {
         console.log("✅ No duplicate found");
       }
     }
 
-    /* 5️⃣ RESPONSE */
+    /* -------------------------------------------------
+       5️⃣ Response
+    -------------------------------------------------- */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
