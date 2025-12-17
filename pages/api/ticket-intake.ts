@@ -11,38 +11,42 @@ const supabase = createClient(
 );
 
 /* =====================================================
-   OpenAI client (never blocks ticket creation)
+   OpenAI client (non-blocking)
 ===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
 /* =====================================================
-   UNIT EXTRACTION — RULE BASED (PRODUCTION SAFE)
+   UNIT EXTRACTION (RULE-BASED, PRODUCTION SAFE)
 ===================================================== */
 async function resolveUnitFromText(
   condo_id: string,
   text: string
 ): Promise<{ unit_id: string | null; unit_label: string | null }> {
-  console.log("🔎 UNIT EXTRACTION START");
   console.log("🧪 RAW TEXT:", text);
 
-  // Matches: A-12-3 | A 12 3 | Block A-12-3
+  // Case-insensitive, supports A-12-3 / a 12 3 / Block A-12-3
   const match = text.match(
-    /(block\s*)?([A-Z])\s*[-\s]?\s*(\d{1,2})\s*[-\s]?\s*(\d{1,2})/i
+    /(block\s*)?([A-Za-z])\s*[- ]?\s*(\d{1,2})\s*[- ]?\s*(\d{1,2})/i
   );
 
   console.log("🧪 REGEX MATCH:", match);
 
-  if (!match) return { unit_id: null, unit_label: null };
+  if (!match) {
+    console.warn("⚠️ No unit pattern detected");
+    return { unit_id: null, unit_label: null };
+  }
 
   const block = match[2].toUpperCase();
   const x = parseInt(match[3], 10);
   const y = parseInt(match[4], 10);
 
-  console.log("🧪 PARSED NUMBERS:", { x, y });
+  console.log("🧪 PARSED VALUES:", { block, x, y });
 
-  // Load condo rules
+  /* --------------------------------------------------
+     Load condo unit rules
+  -------------------------------------------------- */
   const { data: rules, error } = await supabase
     .from("condo_unit_rules")
     .select("*")
@@ -50,16 +54,20 @@ async function resolveUnitFromText(
     .single();
 
   if (error || !rules) {
-    console.warn("⚠️ Condo rules missing");
+    console.warn("⚠️ Condo rules not found", error);
     return { unit_id: null, unit_label: null };
   }
+
+  const format = rules.format
+    ?.toUpperCase()
+    .replace(/_/g, "-")
+    .trim();
 
   const {
     min_floor,
     max_floor,
     min_unit,
     max_unit,
-    format,
   } = rules;
 
   const xIsFloor = x >= min_floor && x <= max_floor;
@@ -73,38 +81,50 @@ async function resolveUnitFromText(
     unit_label = `${block}-${x}-${y}`;
   } else if (format === "BLOCK-UNIT-FLOOR" && xIsUnit && yIsFloor) {
     unit_label = `${block}-${y}-${x}`;
+  } else if (xIsFloor && yIsUnit && !(xIsUnit && yIsFloor)) {
+    unit_label = `${block}-${x}-${y}`;
+  } else if (yIsFloor && xIsUnit && !(yIsUnit && xIsFloor)) {
+    unit_label = `${block}-${y}-${x}`;
   } else {
-    console.warn("⚠️ UNIT AMBIGUOUS — NOT AUTO ASSIGNED");
+    console.warn("⚠️ Unit ambiguous – not auto assigned", {
+      x,
+      y,
+      rules,
+    });
     return { unit_id: null, unit_label: null };
   }
 
   console.log("🏷️ NORMALIZED UNIT:", unit_label);
 
-  // Resolve or create unit
-  const { data: existing } = await supabase
+  /* --------------------------------------------------
+     Resolve or create unit
+  -------------------------------------------------- */
+  const { data: existingUnit } = await supabase
     .from("units")
     .select("id")
     .eq("condo_id", condo_id)
     .eq("unit_label", unit_label)
     .single();
 
-  if (existing) {
-    console.log("✅ UNIT FOUND:", existing.id);
-    return { unit_id: existing.id, unit_label };
+  if (existingUnit) {
+    console.log("✅ UNIT FOUND:", existingUnit.id);
+    return { unit_id: existingUnit.id, unit_label };
   }
 
-  const { data: created } = await supabase
+  const { data: newUnit, error: createError } = await supabase
     .from("units")
     .insert({ condo_id, unit_label })
     .select()
     .single();
 
-  console.log("🆕 UNIT CREATED:", created?.id);
+  if (createError) {
+    console.error("❌ Failed to create unit", createError);
+    return { unit_id: null, unit_label };
+  }
 
-  return {
-    unit_id: created?.id ?? null,
-    unit_label,
-  };
+  console.log("🆕 UNIT CREATED:", newUnit.id);
+
+  return { unit_id: newUnit.id, unit_label };
 }
 
 /* =====================================================
@@ -118,6 +138,7 @@ export default async function handler(
     return res.status(200).json({
       ok: true,
       message: "Ticket intake reached",
+      method: req.method,
     });
   }
 
@@ -141,8 +162,8 @@ export default async function handler(
       });
     }
 
-    /* -------------------------------------------------
-       1️⃣ RESOLVE UNIT FIRST (CRITICAL FIX)
+    /* --------------------------------------------------
+       1️⃣ UNIT RESOLUTION
     -------------------------------------------------- */
     let unit_id: string | null = null;
     let unit_label: string | null = null;
@@ -158,11 +179,9 @@ export default async function handler(
 
     console.log("🧪 UNIT BEFORE INSERT:", { unit_id, unit_label });
 
-    /* -------------------------------------------------
-       2️⃣ INSERT TICKET (WITH unit_id)
+    /* --------------------------------------------------
+       2️⃣ INSERT TICKET
     -------------------------------------------------- */
-    console.log("📝 Inserting ticket...");
-
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
@@ -179,6 +198,7 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
+      console.error("❌ Ticket insert failed", insertError);
       return res.status(500).json({
         error: insertError?.message || "Ticket insert failed",
       });
@@ -186,8 +206,8 @@ export default async function handler(
 
     console.log("✅ Ticket inserted:", ticket.id);
 
-    /* -------------------------------------------------
-       3️⃣ CREATE EMBEDDING
+    /* --------------------------------------------------
+       3️⃣ EMBEDDING
     -------------------------------------------------- */
     let embedding: number[] | null = null;
 
@@ -207,15 +227,13 @@ export default async function handler(
       console.log("📐 Embedding created:", embedding.length);
     }
 
-    /* -------------------------------------------------
+    /* --------------------------------------------------
        4️⃣ DUPLICATE / RELATED LOGIC
     -------------------------------------------------- */
     let duplicateOf: string | null = null;
     let relatedTo: string | null = null;
 
     if (embedding) {
-      console.log("🔍 Running duplicate search…");
-
       const { data: matches } = await supabase.rpc(
         "match_tickets",
         {
@@ -224,57 +242,4 @@ export default async function handler(
           exclude_id: ticket.id,
           created_before: ticket.created_at,
           match_threshold: 0.9,
-          match_count: 1,
-        }
-      );
-
-      console.log("🧪 match_tickets result:", matches);
-
-      if (matches && matches.length > 0) {
-        const best = matches[0];
-
-        if (ticket.is_common_area || best.is_common_area) {
-          duplicateOf = best.id;
-        } else if (
-          ticket.unit_id &&
-          best.unit_id &&
-          ticket.unit_id === best.unit_id
-        ) {
-          duplicateOf = best.id;
-        } else {
-          relatedTo = best.id;
-        }
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicateOf,
-            duplicate_of: duplicateOf,
-            related_to: relatedTo,
-          })
-          .eq("id", ticket.id);
-
-        console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf ?? "RELATED");
-      }
-    }
-
-    /* -------------------------------------------------
-       5️⃣ RESPONSE
-    -------------------------------------------------- */
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      unit_label,
-      unit_id,
-      is_duplicate: !!duplicateOf,
-      duplicate_of: duplicateOf,
-      related_to: relatedTo,
-    });
-  } catch (err: any) {
-    console.error("🔥 Uncaught error:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message,
-    });
-  }
-}
+          mat
