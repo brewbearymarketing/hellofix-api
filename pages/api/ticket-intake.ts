@@ -26,7 +26,7 @@ async function extractUnitIdFromText(
 ): Promise<{ unit_id: string | null; unit_label: string | null }> {
   console.log("🧪 RAW TEXT:", text);
 
-  // Regex: Block A 12-3 / A-12-3 / A12-3
+  // Matches: A-12-3, Block A 12-3, A12-3
   const match = text.match(
     /(block\s*)?([A-Z])\s*[-\/]?\s*(\d{1,2})\s*[-\/]?\s*(\d{1,2})/i
   );
@@ -131,6 +131,8 @@ export default async function handler(
   }
 
   try {
+    console.log("🚀 === TICKET INTAKE START ===");
+
     const body =
       typeof req.body === "string"
         ? JSON.parse(req.body)
@@ -139,7 +141,7 @@ export default async function handler(
     const {
       condo_id,
       description_raw,
-      is_common_area = false,
+      is_common_area,
     } = body;
 
     if (!condo_id || !description_raw) {
@@ -149,12 +151,13 @@ export default async function handler(
     }
 
     /* -------------------------------------------------
-       1️⃣ Resolve unit
+       1️⃣ Resolve unit (IMPORTANT FIX HERE)
     -------------------------------------------------- */
     let unit_id: string | null = null;
     let unit_label: string | null = null;
 
-    if (!is_common_area) {
+    // ✅ FIX: treat undefined as NOT common area
+    if (is_common_area !== true) {
       const result = await extractUnitIdFromText(
         condo_id,
         description_raw
@@ -166,6 +169,8 @@ export default async function handler(
     /* -------------------------------------------------
        2️⃣ Insert ticket
     -------------------------------------------------- */
+    console.log("📝 Inserting ticket...");
+
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
@@ -175,17 +180,20 @@ export default async function handler(
         description_clean: description_raw,
         source: "whatsapp",
         status: "new",
-        is_common_area,
+        is_common_area: is_common_area === true,
         is_duplicate: false,
       })
       .select()
       .single();
 
     if (insertError || !ticket) {
+      console.error("❌ Ticket insert failed", insertError);
       return res.status(500).json({
         error: insertError?.message || "Ticket insert failed",
       });
     }
+
+    console.log("✅ Ticket inserted:", ticket.id);
 
     /* -------------------------------------------------
        3️⃣ Create embedding
@@ -193,12 +201,16 @@ export default async function handler(
     let embedding: number[] | null = null;
 
     if (openai) {
+      console.log("🧠 Creating embedding...");
+
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_raw,
       });
 
       embedding = emb.data[0].embedding;
+
+      console.log("📐 Embedding created:", embedding.length);
 
       await supabase
         .from("tickets")
@@ -213,6 +225,8 @@ export default async function handler(
     let relatedTo: string | null = null;
 
     if (embedding) {
+      console.log("🔍 Running duplicate search…");
+
       const { data: matches } = await supabase.rpc(
         "match_tickets",
         {
@@ -224,6 +238,8 @@ export default async function handler(
           match_count: 1,
         }
       );
+
+      console.log("🧪 match_tickets result:", matches);
 
       if (matches && matches.length > 0) {
         const best = matches[0];
@@ -248,6 +264,10 @@ export default async function handler(
             related_to: relatedTo,
           })
           .eq("id", ticket.id);
+
+        console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf ?? "RELATED");
+      } else {
+        console.log("✅ No duplicate found");
       }
     }
 
