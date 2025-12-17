@@ -3,114 +3,37 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Clients
+   Supabase client (SERVICE ROLE)
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/* =====================================================
+   OpenAI client (optional, never blocks)
+===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
 /* =====================================================
-   COMMON AREA KEYWORDS (MULTI-LANGUAGE)
-===================================================== */
-const COMMON_AREA_KEYWORDS = [
-  // English
-  "lift", "elevator", "corridor", "staircase", "lobby",
-  "parking", "car park", "guard house", "swimming pool",
-  "gym", "playground", "rooftop", "management office",
-
-  // Malay
-  "lif", "koridor", "tangga", "lobi",
-  "tempat letak kereta", "parkir",
-  "pondok pengawal", "kolam renang",
-  "gim", "taman permainan",
-
-  // Mandarin
-  "电梯", "走廊", "楼梯", "大堂",
-  "停车场", "保安亭", "游泳池", "健身房", "游乐场",
-
-  // Tamil
-  "லிப்ட்", "நடைபாதை", "படிக்கட்டு",
-  "வாகனநிலையம்", "நீச்சல் குளம்"
-];
-
-/* =====================================================
-   KEYWORD DETECTION
-===================================================== */
-function detectCommonAreaByKeyword(text: string) {
-  const normalized = text.toLowerCase();
-
-  for (const keyword of COMMON_AREA_KEYWORDS) {
-    if (normalized.includes(keyword.toLowerCase())) {
-      return {
-        is_common_area: true,
-        confidence: 0.95,
-        source: "keyword",
-        matched: keyword,
-      };
-    }
-  }
-
-  return {
-    is_common_area: false,
-    confidence: 0,
-    source: "keyword",
-    matched: null,
-  };
-}
-
-/* =====================================================
-   AI INTENT CLASSIFIER (FALLBACK ONLY)
-===================================================== */
-async function detectCommonAreaByAI(text: string) {
-  if (!openai) return null;
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You classify condo maintenance complaints. Reply JSON only.",
-      },
-      {
-        role: "user",
-        content: `
-Text:
-"${text}"
-
-Question:
-Is this about a common area?
-
-Rules:
-- Respond JSON only
-- is_common_area: true or false
-- confidence: number between 0 and 1
-
-Example:
-{ "is_common_area": true, "confidence": 0.82 }
-`,
-      },
-    ],
-  });
-
-  return JSON.parse(response.choices[0].message.content!);
-}
-
-/* =====================================================
-   API HANDLER
+   API handler
 ===================================================== */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  /* -----------------------------------------------
+     ROUTE GUARD
+  ------------------------------------------------ */
   if (req.method !== "POST") {
-    return res.status(200).json({ ok: true });
+    console.log("ℹ️ Non-POST request received");
+    return res.status(200).json({
+      ok: true,
+      message: "Ticket intake reached",
+      method: req.method,
+    });
   }
 
   try {
@@ -121,98 +44,140 @@ export default async function handler(
         ? JSON.parse(req.body)
         : req.body;
 
-    const {
-      condo_id,
-      description_raw,
-      from_phone, // WhatsApp number (E.164)
-    } = body;
+    const { condo_id, description_raw } = body;
 
-    if (!condo_id || !description_raw || !from_phone) {
+    if (!condo_id || !description_raw) {
+      console.log("❌ Missing required fields", body);
       return res.status(400).json({
-        error: "Missing condo_id, description_raw or from_phone",
+        error: "Missing condo_id or description_raw",
       });
     }
 
-    /* --------------------------------------------------
-       1️⃣ RESOLVE RESIDENT → UNIT
+    /* -------------------------------------------------
+       1️⃣ INSERT TICKET (ALWAYS FIRST)
     -------------------------------------------------- */
-    const { data: resident, error: residentError } =
-      await supabase
-        .from("residents")
-        .select("unit_id")
-        .eq("condo_id", condo_id)
-        .eq("phone_number", from_phone)
-        .single();
+    console.log("📝 Inserting ticket...");
 
-    if (residentError || !resident) {
-      return res.status(403).json({
-        error: "Phone number not registered with management",
+    const { data: ticket, error: insertError } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        description_raw,
+        description_clean: description_raw,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: false,
+        is_duplicate: false,
+      })
+      .select()
+      .single();
+
+    if (insertError || !ticket) {
+      console.error("❌ Ticket insert failed", insertError);
+      return res.status(500).json({
+        error: insertError?.message || "Ticket insert failed",
       });
     }
 
-    let unit_id: string | null = resident.unit_id;
+    console.log("✅ Ticket inserted:", ticket.id);
 
-    /* --------------------------------------------------
-       2️⃣ COMMON AREA DETECTION (HYBRID)
+    /* -------------------------------------------------
+       2️⃣ CREATE EMBEDDING (BEST EFFORT)
     -------------------------------------------------- */
-    let intent = detectCommonAreaByKeyword(description_raw);
+    let embedding: number[] | null = null;
 
-    if (!intent.is_common_area && openai) {
-      const aiResult = await detectCommonAreaByAI(description_raw);
+    if (!openai) {
+      console.log("⚠️ OpenAI disabled (no API key)");
+    } else {
+      try {
+        console.log("🧠 Creating embedding...");
 
-      if (aiResult && aiResult.confidence >= 0.75) {
-        intent = {
-          is_common_area: aiResult.is_common_area,
-          confidence: aiResult.confidence,
-          source: "ai",
-          matched: null,
-        };
+        const embeddingResponse = await openai.embeddings.create({
+          model: "text-embedding-3-small",
+          input: description_raw,
+        });
+
+        embedding = embeddingResponse.data?.[0]?.embedding ?? null;
+
+        if (embedding) {
+          console.log("📐 Embedding created:", embedding.length);
+
+          await supabase
+            .from("tickets")
+            .update({
+              embedding: embedding as unknown as number[],
+            })
+            .eq("id", ticket.id);
+        }
+      } catch (err) {
+        console.error("⚠️ Embedding failed (ignored):", err);
       }
     }
 
-    // If common area → clear unit
-    if (intent.is_common_area) {
-      unit_id = null;
-    }
+  /* -------------------------------------------------
+   3️⃣ DUPLICATE DETECTION
+-------------------------------------------------- */
+let duplicateOf: string | null = null;
 
-    /* --------------------------------------------------
-       3️⃣ INSERT TICKET
-    -------------------------------------------------- */
-    const { data: ticket, error: insertError } =
+if (embedding) {
+  console.log("🔍 Running duplicate search…");
+
+  const { data: matches, error: matchError } =
+    await supabase.rpc("match_tickets", {
+      query_embedding: embedding,
+      condo_filter: condo_id,
+      exclude_id: ticket.id,
+      created_before: ticket.created_at,
+      match_threshold: 0.85,
+      match_count: 1,
+    });
+
+  console.log("🧪 match_tickets result:", matches);
+
+  if (matchError) {
+    console.error("❌ match_tickets error:", matchError);
+  } else if (matches && matches.length > 0) {
+    const bestMatch = matches[0];
+
+    if (typeof bestMatch.similarity === "number") {
+      console.log(
+        "🧠 Similarity score:",
+        bestMatch.similarity
+      );
+
+      duplicateOf = bestMatch.id;
+
       await supabase
         .from("tickets")
-        .insert({
-          condo_id,
-          unit_id,
-          description_raw,
-          description_clean: description_raw,
-          is_common_area: intent.is_common_area,
-          intent_source: intent.source,
-          intent_confidence: intent.confidence,
-          status: "new",
+        .update({
+          is_duplicate: true,
+          duplicate_of: duplicateOf,
         })
-        .select()
-        .single();
+        .eq("id", ticket.id);
 
-    if (insertError || !ticket) {
-      throw insertError;
+      console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
+    } else {
+      console.warn("⚠️ similarity missing from RPC result");
     }
+  } else {
+    console.log("✅ No duplicate found");
+  }
+}
 
-    console.log("✅ Ticket created:", ticket.id);
-
-    /* --------------------------------------------------
+    /* -------------------------------------------------
        4️⃣ RESPONSE
     -------------------------------------------------- */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      is_common_area: intent.is_common_area,
-      intent,
+      is_duplicate: !!duplicateOf,
+      duplicate_of: duplicateOf,
     });
   } catch (err: any) {
-    console.error("🔥 ERROR", err);
+    console.error("🔥 Uncaught error:", err);
     return res.status(500).json({
-      error: err.message,
+      error: "Internal Server Error",
+      detail: err.message,
     });
   }
 }
