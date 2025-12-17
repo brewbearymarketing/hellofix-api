@@ -242,4 +242,57 @@ export default async function handler(
           exclude_id: ticket.id,
           created_before: ticket.created_at,
           match_threshold: 0.9,
-          mat
+          match_count: 1,
+        }
+      );
+
+      console.log("🧪 match_tickets result:", matches);
+
+      if (matches && matches.length > 0) {
+        const best = matches[0];
+
+        if (
+          ticket.is_common_area ||
+          best.is_common_area ||
+          (ticket.unit_id &&
+            best.unit_id &&
+            ticket.unit_id === best.unit_id)
+        ) {
+          duplicateOf = best.id;
+          console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
+        } else {
+          relatedTo = best.id;
+          console.log("🟡 RELATED TICKET:", relatedTo);
+        }
+
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: !!duplicateOf,
+            duplicate_of: duplicateOf,
+            related_to: relatedTo,
+          })
+          .eq("id", ticket.id);
+      }
+    }
+
+    /* --------------------------------------------------
+       5️⃣ RESPONSE
+    -------------------------------------------------- */
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
+      unit_id,
+      unit_label,
+      is_duplicate: !!duplicateOf,
+      duplicate_of: duplicateOf,
+      related_to: relatedTo,
+    });
+  } catch (err: any) {
+    console.error("🔥 Uncaught error", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message,
+    });
+  }
+}
