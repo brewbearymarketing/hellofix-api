@@ -18,31 +18,45 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   UNIT EXTRACTION (RULE-BASED)
+   UNIT EXTRACTION (RULE-BASED, SAFE)
 ===================================================== */
 async function extractUnitIdFromText(
   condo_id: string,
   text: string
 ): Promise<{ unit_id: string | null; unit_label: string | null }> {
-  // Step 1: extract raw pattern
+  console.log("🧪 RAW TEXT:", text);
+
+  // Regex: Block A 12-3 / A-12-3 / A12-3
   const match = text.match(
-    /(block\s*)?([A-Z])\s*[-]?\s*(\d{1,2})\s*[-]?\s*(\d{1,2})/i
+    /(block\s*)?([A-Z])\s*[-\/]?\s*(\d{1,2})\s*[-\/]?\s*(\d{1,2})/i
   );
 
-  if (!match) return { unit_id: null, unit_label: null };
+  console.log("🧪 REGEX MATCH:", match);
+
+  if (!match) {
+    console.warn("⚠️ NO UNIT PATTERN FOUND");
+    return { unit_id: null, unit_label: null };
+  }
 
   const block = match[2].toUpperCase();
   const a = parseInt(match[3], 10);
   const b = parseInt(match[4], 10);
 
-  // Step 2: load condo rules
+  console.log("🧪 PARSED NUMBERS:", { a, b });
+
+  // Load condo rules
   const { data: rules } = await supabase
     .from("condo_unit_rules")
     .select("*")
     .eq("condo_id", condo_id)
     .single();
 
-  if (!rules) return { unit_id: null, unit_label: null };
+  console.log("🧪 RULES FOUND:", rules);
+
+  if (!rules) {
+    console.warn("⚠️ NO CONDO RULES FOUND");
+    return { unit_id: null, unit_label: null };
+  }
 
   const {
     min_floor,
@@ -68,11 +82,13 @@ async function extractUnitIdFromText(
   } else if (bIsFloor && aIsUnit && !(bIsUnit && aIsFloor)) {
     unit_label = `${block}-${b}-${a}`;
   } else {
-    // ambiguous → DO NOT AUTO-ASSIGN
+    console.warn("⚠️ UNIT AMBIGUOUS – NOT ASSIGNED", { a, b, rules });
     return { unit_id: null, unit_label: null };
   }
 
-  // Step 3: resolve or create unit
+  console.log("✅ NORMALIZED UNIT:", unit_label);
+
+  // Resolve or create unit
   const { data: unit } = await supabase
     .from("units")
     .select("id")
@@ -81,6 +97,7 @@ async function extractUnitIdFromText(
     .single();
 
   if (unit) {
+    console.log("✅ EXISTING UNIT FOUND:", unit.id);
     return { unit_id: unit.id, unit_label };
   }
 
@@ -90,6 +107,8 @@ async function extractUnitIdFromText(
     .select()
     .single();
 
+  console.log("🆕 NEW UNIT CREATED:", newUnit?.id);
+
   return {
     unit_id: newUnit?.id ?? null,
     unit_label,
@@ -97,7 +116,7 @@ async function extractUnitIdFromText(
 }
 
 /* =====================================================
-   API handler
+   API HANDLER
 ===================================================== */
 export default async function handler(
   req: NextApiRequest,
@@ -130,7 +149,7 @@ export default async function handler(
     }
 
     /* -------------------------------------------------
-       1️⃣ Resolve unit (text → rule → UUID)
+       1️⃣ Resolve unit
     -------------------------------------------------- */
     let unit_id: string | null = null;
     let unit_label: string | null = null;
