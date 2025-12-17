@@ -114,51 +114,55 @@ export default async function handler(
       }
     }
 
-    /* -------------------------------------------------
-       3️⃣ DUPLICATE DETECTION (OLDER TICKETS ONLY)
-    -------------------------------------------------- */
-    let duplicateOf: string | null = null;
+  /* -------------------------------------------------
+   3️⃣ DUPLICATE DETECTION
+-------------------------------------------------- */
+let duplicateOf: string | null = null;
 
-    if (embedding) {
-      console.log("🔍 Checking for duplicates...");
+if (embedding) {
+  console.log("🔍 Running duplicate search…");
 
-      const { data: matches, error: matchError } =
-        await supabase.rpc("match_tickets", {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          exclude_id: ticket.id,
-          created_before: ticket.created_at, // 🔑 CRITICAL FIX
-          match_threshold: 0.85,
-          match_count: 1,
-        });
+  const { data: matches, error: matchError } =
+    await supabase.rpc("match_tickets", {
+      query_embedding: embedding,
+      condo_filter: condo_id,
+      exclude_id: ticket.id,
+      created_before: ticket.created_at,
+      match_threshold: 0.85,
+      match_count: 1,
+    });
 
-      if (matchError) {
-        console.error("❌ match_tickets error:", matchError);
-      } else if (matches && matches.length > 0) {
-        const bestMatch = matches[0];
+  console.log("🧪 match_tickets result:", matches);
 
-        console.log(
-          "🧠 Similarity:",
-          bestMatch.similarity
-        );
+  if (matchError) {
+    console.error("❌ match_tickets error:", matchError);
+  } else if (matches && matches.length > 0) {
+    const bestMatch = matches[0];
 
-        if (bestMatch.similarity >= 0.85) {
-          duplicateOf = bestMatch.id;
+    if (typeof bestMatch.similarity === "number") {
+      console.log(
+        "🧠 Similarity score:",
+        bestMatch.similarity
+      );
 
-          await supabase
-            .from("tickets")
-            .update({
-              is_duplicate: true,
-              duplicate_of: duplicateOf,
-            })
-            .eq("id", ticket.id);
+      duplicateOf = bestMatch.id;
 
-          console.log("🔁 Duplicate detected:", duplicateOf);
-        }
-      } else {
-        console.log("✅ No duplicate found");
-      }
+      await supabase
+        .from("tickets")
+        .update({
+          is_duplicate: true,
+          duplicate_of: duplicateOf,
+        })
+        .eq("id", ticket.id);
+
+      console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
+    } else {
+      console.warn("⚠️ similarity missing from RPC result");
     }
+  } else {
+    console.log("✅ No duplicate found");
+  }
+}
 
     /* -------------------------------------------------
        4️⃣ RESPONSE
