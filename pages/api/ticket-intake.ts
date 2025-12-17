@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Supabase client (SERVICE ROLE)
+   Supabase client
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,7 +11,7 @@ const supabase = createClient(
 );
 
 /* =====================================================
-   OpenAI client (optional, never blocks)
+   OpenAI client
 ===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -24,11 +24,7 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  /* -----------------------------------------------
-     ROUTE GUARD
-  ------------------------------------------------ */
   if (req.method !== "POST") {
-    console.log("ℹ️ Non-POST request received");
     return res.status(200).json({
       ok: true,
       message: "Ticket intake reached",
@@ -37,43 +33,45 @@ export default async function handler(
   }
 
   try {
-    console.log("🚀 === TICKET INTAKE START ===");
+    console.log("🚀 TICKET INTAKE START");
 
     const body =
       typeof req.body === "string"
         ? JSON.parse(req.body)
         : req.body;
 
-    const { condo_id, description_raw } = body;
+    const {
+      condo_id,
+      description_raw,
+      unit_id = null,
+      is_common_area = false,
+    } = body;
 
     if (!condo_id || !description_raw) {
-      console.log("❌ Missing required fields", body);
       return res.status(400).json({
         error: "Missing condo_id or description_raw",
       });
     }
 
     /* -------------------------------------------------
-       1️⃣ INSERT TICKET (ALWAYS FIRST)
+       1️⃣ INSERT TICKET
     -------------------------------------------------- */
-    console.log("📝 Inserting ticket...");
-
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
         condo_id,
+        unit_id,
         description_raw,
         description_clean: description_raw,
         source: "whatsapp",
         status: "new",
-        is_common_area: false,
+        is_common_area,
         is_duplicate: false,
       })
       .select()
       .single();
 
     if (insertError || !ticket) {
-      console.error("❌ Ticket insert failed", insertError);
       return res.status(500).json({
         error: insertError?.message || "Ticket insert failed",
       });
@@ -82,16 +80,12 @@ export default async function handler(
     console.log("✅ Ticket inserted:", ticket.id);
 
     /* -------------------------------------------------
-       2️⃣ CREATE EMBEDDING (BEST EFFORT)
+       2️⃣ CREATE EMBEDDING
     -------------------------------------------------- */
     let embedding: number[] | null = null;
 
-    if (!openai) {
-      console.log("⚠️ OpenAI disabled (no API key)");
-    } else {
+    if (openai) {
       try {
-        console.log("🧠 Creating embedding...");
-
         const embeddingResponse = await openai.embeddings.create({
           model: "text-embedding-3-small",
           input: description_raw,
@@ -100,69 +94,65 @@ export default async function handler(
         embedding = embeddingResponse.data?.[0]?.embedding ?? null;
 
         if (embedding) {
-          console.log("📐 Embedding created:", embedding.length);
-
           await supabase
             .from("tickets")
-            .update({
-              embedding: embedding as unknown as number[],
-            })
+            .update({ embedding })
             .eq("id", ticket.id);
         }
-      } catch (err) {
-        console.error("⚠️ Embedding failed (ignored):", err);
+      } catch (e) {
+        console.error("⚠️ Embedding failed", e);
       }
     }
 
-  /* -------------------------------------------------
-   3️⃣ DUPLICATE DETECTION
--------------------------------------------------- */
-let duplicateOf: string | null = null;
+    /* -------------------------------------------------
+       3️⃣ DUPLICATE / RELATED LOGIC (HYBRID)
+    -------------------------------------------------- */
+    let duplicateOf: string | null = null;
+    let relatedTo: string | null = null;
 
-if (embedding) {
-  console.log("🔍 Running duplicate search…");
-
-  const { data: matches, error: matchError } =
-    await supabase.rpc("match_tickets", {
-      query_embedding: embedding,
-      condo_filter: condo_id,
-      exclude_id: ticket.id,
-      created_before: ticket.created_at,
-      match_threshold: 0.85,
-      match_count: 1,
-    });
-
-  console.log("🧪 match_tickets result:", matches);
-
-  if (matchError) {
-    console.error("❌ match_tickets error:", matchError);
-  } else if (matches && matches.length > 0) {
-    const bestMatch = matches[0];
-
-    if (typeof bestMatch.similarity === "number") {
-      console.log(
-        "🧠 Similarity score:",
-        bestMatch.similarity
+    if (embedding) {
+      const { data: matches } = await supabase.rpc(
+        "match_tickets",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          exclude_id: ticket.id,
+          created_before: ticket.created_at,
+          match_threshold: 0.85,
+          match_count: 1,
+        }
       );
 
-      duplicateOf = bestMatch.id;
+      if (matches && matches.length > 0) {
+        const best = matches[0];
 
-      await supabase
-        .from("tickets")
-        .update({
-          is_duplicate: true,
-          duplicate_of: duplicateOf,
-        })
-        .eq("id", ticket.id);
+        // 🔴 COMMON AREA → HARD DUPLICATE
+        if (ticket.is_common_area || best.is_common_area) {
+          duplicateOf = best.id;
+        }
+        // 🔴 SAME UNIT → HARD DUPLICATE
+        else if (
+          ticket.unit_id &&
+          best.unit_id &&
+          ticket.unit_id === best.unit_id
+        ) {
+          duplicateOf = best.id;
+        }
+        // 🟡 DIFFERENT UNIT → RELATED
+        else {
+          relatedTo = best.id;
+        }
 
-      console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
-    } else {
-      console.warn("⚠️ similarity missing from RPC result");
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: !!duplicateOf,
+            duplicate_of: duplicateOf,
+            related_to: relatedTo,
+          })
+          .eq("id", ticket.id);
+      }
     }
-  } else {
-    console.log("✅ No duplicate found");
-  }
-}
 
     /* -------------------------------------------------
        4️⃣ RESPONSE
@@ -172,9 +162,10 @@ if (embedding) {
       ticket_id: ticket.id,
       is_duplicate: !!duplicateOf,
       duplicate_of: duplicateOf,
+      related_to: relatedTo,
     });
   } catch (err: any) {
-    console.error("🔥 Uncaught error:", err);
+    console.error("🔥 Uncaught error", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message,
