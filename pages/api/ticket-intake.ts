@@ -3,128 +3,103 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   Supabase client (SERVICE ROLE)
+   Clients
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/* =====================================================
-   OpenAI client (non-blocking)
-===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
 /* =====================================================
-   UNIT EXTRACTION (RULE-BASED, PRODUCTION SAFE)
+   COMMON AREA KEYWORDS (MULTI-LANGUAGE)
 ===================================================== */
-async function resolveUnitFromText(
-  condo_id: string,
-  text: string
-): Promise<{ unit_id: string | null; unit_label: string | null }> {
-  console.log("🧪 RAW TEXT:", text);
+const COMMON_AREA_KEYWORDS = [
+  // English
+  "lift", "elevator", "corridor", "staircase", "lobby",
+  "parking", "car park", "guard house", "swimming pool",
+  "gym", "playground", "rooftop", "management office",
 
-  // Case-insensitive, supports A-12-3 / a 12 3 / Block A-12-3
-  const match = text.match(
-    /(block\s*)?([A-Za-z])\s*[- ]?\s*(\d{1,2})\s*[- ]?\s*(\d{1,2})/i
-  );
+  // Malay
+  "lif", "koridor", "tangga", "lobi",
+  "tempat letak kereta", "parkir",
+  "pondok pengawal", "kolam renang",
+  "gim", "taman permainan",
 
-  console.log("🧪 REGEX MATCH:", match);
+  // Mandarin
+  "电梯", "走廊", "楼梯", "大堂",
+  "停车场", "保安亭", "游泳池", "健身房", "游乐场",
 
-  if (!match) {
-    console.warn("⚠️ No unit pattern detected");
-    return { unit_id: null, unit_label: null };
+  // Tamil
+  "லிப்ட்", "நடைபாதை", "படிக்கட்டு",
+  "வாகனநிலையம்", "நீச்சல் குளம்"
+];
+
+/* =====================================================
+   KEYWORD DETECTION
+===================================================== */
+function detectCommonAreaByKeyword(text: string) {
+  const normalized = text.toLowerCase();
+
+  for (const keyword of COMMON_AREA_KEYWORDS) {
+    if (normalized.includes(keyword.toLowerCase())) {
+      return {
+        is_common_area: true,
+        confidence: 0.95,
+        source: "keyword",
+        matched: keyword,
+      };
+    }
   }
 
-  const block = match[2].toUpperCase();
-  const x = parseInt(match[3], 10);
-  const y = parseInt(match[4], 10);
+  return {
+    is_common_area: false,
+    confidence: 0,
+    source: "keyword",
+    matched: null,
+  };
+}
 
-  console.log("🧪 PARSED VALUES:", { block, x, y });
+/* =====================================================
+   AI INTENT CLASSIFIER (FALLBACK ONLY)
+===================================================== */
+async function detectCommonAreaByAI(text: string) {
+  if (!openai) return null;
 
-  /* --------------------------------------------------
-     Load condo unit rules
-  -------------------------------------------------- */
-  const { data: rules, error } = await supabase
-    .from("condo_unit_rules")
-    .select("*")
-    .eq("condo_id", condo_id)
-    .single();
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You classify condo maintenance complaints. Reply JSON only.",
+      },
+      {
+        role: "user",
+        content: `
+Text:
+"${text}"
 
-  if (error || !rules) {
-    console.warn("⚠️ Condo rules not found", error);
-    return { unit_id: null, unit_label: null };
-  }
+Question:
+Is this about a common area?
 
-  const format = rules.format
-    ?.toUpperCase()
-    .replace(/_/g, "-")
-    .trim();
+Rules:
+- Respond JSON only
+- is_common_area: true or false
+- confidence: number between 0 and 1
 
-  const {
-    min_floor,
-    max_floor,
-    min_unit,
-    max_unit,
-  } = rules;
+Example:
+{ "is_common_area": true, "confidence": 0.82 }
+`,
+      },
+    ],
+  });
 
-  const xIsFloor = x >= min_floor && x <= max_floor;
-  const yIsUnit = y >= min_unit && y <= max_unit;
-  const yIsFloor = y >= min_floor && y <= max_floor;
-  const xIsUnit = x >= min_unit && x <= max_unit;
-
-  let unit_label: string | null = null;
-
-  if (format === "BLOCK-FLOOR-UNIT" && xIsFloor && yIsUnit) {
-    unit_label = `${block}-${x}-${y}`;
-  } else if (format === "BLOCK-UNIT-FLOOR" && xIsUnit && yIsFloor) {
-    unit_label = `${block}-${y}-${x}`;
-  } else if (xIsFloor && yIsUnit && !(xIsUnit && yIsFloor)) {
-    unit_label = `${block}-${x}-${y}`;
-  } else if (yIsFloor && xIsUnit && !(yIsUnit && xIsFloor)) {
-    unit_label = `${block}-${y}-${x}`;
-  } else {
-    console.warn("⚠️ Unit ambiguous – not auto assigned", {
-      x,
-      y,
-      rules,
-    });
-    return { unit_id: null, unit_label: null };
-  }
-
-  console.log("🏷️ NORMALIZED UNIT:", unit_label);
-
-  /* --------------------------------------------------
-     Resolve or create unit
-  -------------------------------------------------- */
-  const { data: existingUnit } = await supabase
-    .from("units")
-    .select("id")
-    .eq("condo_id", condo_id)
-    .eq("unit_label", unit_label)
-    .single();
-
-  if (existingUnit) {
-    console.log("✅ UNIT FOUND:", existingUnit.id);
-    return { unit_id: existingUnit.id, unit_label };
-  }
-
-  const { data: newUnit, error: createError } = await supabase
-    .from("units")
-    .insert({ condo_id, unit_label })
-    .select()
-    .single();
-
-  if (createError) {
-    console.error("❌ Failed to create unit", createError);
-    return { unit_id: null, unit_label };
-  }
-
-  console.log("🆕 UNIT CREATED:", newUnit.id);
-
-  return { unit_id: newUnit.id, unit_label };
+  return JSON.parse(response.choices[0].message.content!);
 }
 
 /* =====================================================
@@ -135,11 +110,7 @@ export default async function handler(
   res: NextApiResponse
 ) {
   if (req.method !== "POST") {
-    return res.status(200).json({
-      ok: true,
-      message: "Ticket intake reached",
-      method: req.method,
-    });
+    return res.status(200).json({ ok: true });
   }
 
   try {
@@ -153,146 +124,95 @@ export default async function handler(
     const {
       condo_id,
       description_raw,
-      is_common_area = false,
+      from_phone, // WhatsApp number (E.164)
     } = body;
 
-    if (!condo_id || !description_raw) {
+    if (!condo_id || !description_raw || !from_phone) {
       return res.status(400).json({
-        error: "Missing condo_id or description_raw",
+        error: "Missing condo_id, description_raw or from_phone",
       });
     }
 
     /* --------------------------------------------------
-       1️⃣ UNIT RESOLUTION
+       1️⃣ RESOLVE RESIDENT → UNIT
     -------------------------------------------------- */
-    let unit_id: string | null = null;
-    let unit_label: string | null = null;
-
-    if (!is_common_area) {
-      const resolved = await resolveUnitFromText(
-        condo_id,
-        description_raw
-      );
-      unit_id = resolved.unit_id;
-      unit_label = resolved.unit_label;
-    }
-
-    console.log("🧪 UNIT BEFORE INSERT:", { unit_id, unit_label });
-
-    /* --------------------------------------------------
-       2️⃣ INSERT TICKET
-    -------------------------------------------------- */
-    const { data: ticket, error: insertError } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id,
-        description_raw,
-        description_clean: description_raw,
-        source: "whatsapp",
-        status: "new",
-        is_common_area,
-        is_duplicate: false,
-      })
-      .select()
-      .single();
-
-    if (insertError || !ticket) {
-      console.error("❌ Ticket insert failed", insertError);
-      return res.status(500).json({
-        error: insertError?.message || "Ticket insert failed",
-      });
-    }
-
-    console.log("✅ Ticket inserted:", ticket.id);
-
-    /* --------------------------------------------------
-       3️⃣ EMBEDDING
-    -------------------------------------------------- */
-    let embedding: number[] | null = null;
-
-    if (openai) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_raw,
-      });
-
-      embedding = emb.data[0].embedding;
-
+    const { data: resident, error: residentError } =
       await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
+        .from("residents")
+        .select("unit_id")
+        .eq("condo_id", condo_id)
+        .eq("phone_number", from_phone)
+        .single();
 
-      console.log("📐 Embedding created:", embedding.length);
+    if (residentError || !resident) {
+      return res.status(403).json({
+        error: "Phone number not registered with management",
+      });
     }
 
+    let unit_id: string | null = resident.unit_id;
+
     /* --------------------------------------------------
-       4️⃣ DUPLICATE / RELATED LOGIC
+       2️⃣ COMMON AREA DETECTION (HYBRID)
     -------------------------------------------------- */
-    let duplicateOf: string | null = null;
-    let relatedTo: string | null = null;
+    let intent = detectCommonAreaByKeyword(description_raw);
 
-    if (embedding) {
-      const { data: matches } = await supabase.rpc(
-        "match_tickets",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          exclude_id: ticket.id,
-          created_before: ticket.created_at,
-          match_threshold: 0.9,
-          match_count: 1,
-        }
-      );
+    if (!intent.is_common_area && openai) {
+      const aiResult = await detectCommonAreaByAI(description_raw);
 
-      console.log("🧪 match_tickets result:", matches);
-
-      if (matches && matches.length > 0) {
-        const best = matches[0];
-
-        if (
-          ticket.is_common_area ||
-          best.is_common_area ||
-          (ticket.unit_id &&
-            best.unit_id &&
-            ticket.unit_id === best.unit_id)
-        ) {
-          duplicateOf = best.id;
-          console.log("🔁 DUPLICATE CONFIRMED:", duplicateOf);
-        } else {
-          relatedTo = best.id;
-          console.log("🟡 RELATED TICKET:", relatedTo);
-        }
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicateOf,
-            duplicate_of: duplicateOf,
-            related_to: relatedTo,
-          })
-          .eq("id", ticket.id);
+      if (aiResult && aiResult.confidence >= 0.75) {
+        intent = {
+          is_common_area: aiResult.is_common_area,
+          confidence: aiResult.confidence,
+          source: "ai",
+          matched: null,
+        };
       }
     }
 
+    // If common area → clear unit
+    if (intent.is_common_area) {
+      unit_id = null;
+    }
+
     /* --------------------------------------------------
-       5️⃣ RESPONSE
+       3️⃣ INSERT TICKET
+    -------------------------------------------------- */
+    const { data: ticket, error: insertError } =
+      await supabase
+        .from("tickets")
+        .insert({
+          condo_id,
+          unit_id,
+          description_raw,
+          description_clean: description_raw,
+          is_common_area: intent.is_common_area,
+          intent_source: intent.source,
+          intent_confidence: intent.confidence,
+          status: "new",
+        })
+        .select()
+        .single();
+
+    if (insertError || !ticket) {
+      throw insertError;
+    }
+
+    console.log("✅ Ticket created:", ticket.id);
+
+    /* --------------------------------------------------
+       4️⃣ RESPONSE
     -------------------------------------------------- */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      unit_id,
-      unit_label,
-      is_duplicate: !!duplicateOf,
-      duplicate_of: duplicateOf,
-      related_to: relatedTo,
+      is_common_area: intent.is_common_area,
+      intent,
     });
   } catch (err: any) {
-    console.error("🔥 Uncaught error", err);
+    console.error("🔥 ERROR", err);
     return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message,
+      error: err.message,
     });
   }
 }
