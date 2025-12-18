@@ -15,62 +15,72 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
+   CONFIG
+===================================================== */
+const DIAGNOSIS_FEE = 80; // RM
+const PLATFORM_COMMISSION = 0.13;
+const MANAGEMENT_COMMISSION = 0.02;
+
+/* =====================================================
    COMMON AREA KEYWORDS (MULTI-LANGUAGE)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
-  // English
+  // EN
   "lift", "lobby", "corridor", "parking", "staircase", "guardhouse",
-  // Malay
+  // BM
   "lif", "lobi", "koridor", "tempat letak kereta", "tangga",
-  // Mandarin
+  // 中文
   "电梯", "大堂", "走廊", "停车场",
-  // Tamil
+  // தமிழ்
   "லிப்ட்", "நடையாலம்", "வாகன நிறுத்தம்"
 ];
 
-function keywordDetectCommonArea(text: string): boolean {
-  const lower = text.toLowerCase();
-  return COMMON_AREA_KEYWORDS.some(k =>
-    lower.includes(k.toLowerCase())
-  );
+function detectCommonAreaKeyword(text: string): boolean {
+  const t = text.toLowerCase();
+  return COMMON_AREA_KEYWORDS.some(k => t.includes(k.toLowerCase()));
 }
 
 /* =====================================================
-   AI INTENT CLASSIFICATION (SAFE)
+   AI INTENT CLASSIFIER (SAFE)
 ===================================================== */
-async function aiDetectIntent(text: string): Promise<{
-  intent: "unit" | "common_area" | "uncertain";
-  confidence: number;
-}> {
-  if (!openai) {
-    return { intent: "uncertain", confidence: 0 };
-  }
+async function aiIntent(text: string) {
+  if (!openai) return { intent: "uncertain", confidence: 0 };
 
-  const response = await openai.chat.completions.create({
+  const r = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
       {
         role: "system",
         content:
-          "Classify the maintenance issue as one of: unit, common_area, uncertain. Reply ONLY in JSON."
+          "Classify maintenance issue as: unit | common_area | uncertain. Respond in JSON: {intent, confidence}"
       },
-      {
-        role: "user",
-        content: text
-      }
+      { role: "user", content: text }
     ]
   });
 
   try {
-    const parsed = JSON.parse(response.choices[0].message.content || "{}");
-    return {
-      intent: parsed.intent ?? "uncertain",
-      confidence: Number(parsed.confidence ?? 0)
-    };
+    return JSON.parse(r.choices[0].message.content || "{}");
   } catch {
     return { intent: "uncertain", confidence: 0 };
   }
+}
+
+/* =====================================================
+   CONTRACTOR AUTO ASSIGNMENT
+===================================================== */
+async function autoAssignContractor(condo_id: string) {
+  const now = new Date().toISOString();
+
+  const { data: contractors } = await supabase
+    .from("contractors")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .or(`cooling_off_until.is.null,cooling_off_until.lt.${now}`)
+    .order("sla_score", { ascending: false })
+    .limit(1);
+
+  return contractors?.[0] ?? null;
 }
 
 /* =====================================================
@@ -80,31 +90,18 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(200).json({ ok: true });
-  }
+  if (req.method !== "POST") return res.status(200).json({ ok: true });
 
   try {
-    console.log("🚀 === TICKET INTAKE START ===");
-
-    const body = typeof req.body === "string"
-      ? JSON.parse(req.body)
-      : req.body;
-
-    const {
-      condo_id,
-      description_raw,
-      phone_number
-    } = body;
+    const { condo_id, description_raw, phone_number } =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     if (!condo_id || !description_raw || !phone_number) {
-      return res.status(400).json({
-        error: "Missing condo_id, description_raw, or phone_number"
-      });
+      return res.status(400).json({ error: "Missing fields" });
     }
 
     /* =====================================================
-       1️⃣ RESOLVE RESIDENT → UNIT
+       1️⃣ RESIDENT VALIDATION
     ===================================================== */
     const { data: resident } = await supabase
       .from("residents")
@@ -115,11 +112,9 @@ export default async function handler(
 
     if (!resident) {
       return res.status(403).json({
-        error: "Phone number not registered with management"
+        error: "Phone number not registered. Management approval required."
       });
     }
-
-    const unit_id = resident.unit_id;
 
     /* =====================================================
        2️⃣ INTENT DETECTION (3 LAYERS)
@@ -128,19 +123,16 @@ export default async function handler(
     let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // Layer 1: Keyword
-    if (keywordDetectCommonArea(description_raw)) {
+    if (detectCommonAreaKeyword(description_raw)) {
       is_common_area = true;
     } else {
-      // Layer 2: AI
-      const aiResult = await aiDetectIntent(description_raw);
+      const ai = await aiIntent(description_raw);
 
-      if (aiResult.confidence >= 0.75) {
-        is_common_area = aiResult.intent === "common_area";
+      if (ai.confidence >= 0.75) {
+        is_common_area = ai.intent === "common_area";
         intent_source = "ai";
-        intent_confidence = aiResult.confidence;
+        intent_confidence = ai.confidence;
       } else {
-        // Layer 3: Ask resident
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
           payload: {
@@ -150,59 +142,75 @@ export default async function handler(
           }
         });
 
-        return res.status(202).json({
-          pending: true,
-          message: "Awaiting resident confirmation"
-        });
+        return res.status(202).json({ pending: true });
       }
     }
 
     /* =====================================================
-       3️⃣ INSERT TICKET
+       3️⃣ CREATE TICKET
     ===================================================== */
     const { data: ticket } = await supabase
       .from("tickets")
       .insert({
         condo_id,
-        unit_id,
+        unit_id: resident.unit_id,
         description_raw,
         description_clean: description_raw,
         source: "whatsapp",
-        status: "new",
+        status: "diagnosis_pending",
         is_common_area,
-        is_duplicate: false,
         intent_source,
-        intent_confidence
+        intent_confidence,
+        is_duplicate: false
       })
       .select()
       .single();
 
     /* =====================================================
-       4️⃣ EMBEDDING
+       4️⃣ DIAGNOSIS PAYMENT REQUIRED
     ===================================================== */
-    let embedding: number[] | null = null;
+    await supabase.from("payments").insert({
+      ticket_id: ticket.id,
+      amount: DIAGNOSIS_FEE,
+      status: "pending",
+      provider: "whatsapp_pay"
+    });
 
+    /* =====================================================
+       5️⃣ AUTO ASSIGN CONTRACTOR
+    ===================================================== */
+    const contractor = await autoAssignContractor(condo_id);
+
+    if (!contractor) {
+      return res.status(500).json({
+        error: "No contractor available"
+      });
+    }
+
+    await supabase
+      .from("tickets")
+      .update({
+        auto_assigned_contractor_id: contractor.id,
+        status: "diagnosis_paid_waiting_inspection"
+      })
+      .eq("id", ticket.id);
+
+    /* =====================================================
+       6️⃣ DUPLICATE / RELATED
+    ===================================================== */
     if (openai) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_raw
       });
 
-      embedding = emb.data[0].embedding;
+      const embedding = emb.data[0].embedding;
 
       await supabase
         .from("tickets")
         .update({ embedding })
         .eq("id", ticket.id);
-    }
 
-    /* =====================================================
-       5️⃣ DUPLICATE / RELATED DETECTION
-    ===================================================== */
-    let duplicate_of: string | null = null;
-    let related_to: string | null = null;
-
-    if (embedding) {
       const { data: matches } = await supabase.rpc("match_tickets", {
         query_embedding: embedding,
         condo_filter: condo_id,
@@ -213,45 +221,32 @@ export default async function handler(
 
       if (matches?.length) {
         const best = matches[0];
-
-        if (
-          is_common_area ||
-          best.is_common_area ||
-          (best.unit_id && best.unit_id === unit_id)
-        ) {
-          duplicate_of = best.id;
-        } else {
-          related_to = best.id;
-        }
+        const hardDuplicate =
+          is_common_area || best.is_common_area;
 
         await supabase
           .from("tickets")
           .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
+            is_duplicate: hardDuplicate,
+            duplicate_of: hardDuplicate ? best.id : null,
+            related_to: hardDuplicate ? null : best.id
           })
           .eq("id", ticket.id);
       }
     }
 
     /* =====================================================
-       6️⃣ RESPONSE
+       7️⃣ RESPONSE
     ===================================================== */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      unit_id,
-      is_common_area,
-      duplicate_of,
-      related_to
+      contractor_assigned: contractor.id,
+      diagnosis_fee: DIAGNOSIS_FEE
     });
 
   } catch (err: any) {
-    console.error("🔥 ERROR:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
-    });
+    console.error(err);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 }
