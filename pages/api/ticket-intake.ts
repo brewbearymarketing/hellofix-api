@@ -15,16 +15,17 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   COMMON AREA KEYWORDS (HARD OVERRIDE, MULTI-LANGUAGE)
+   COMMON AREA KEYWORDS (HARD RULES – PRIORITY 1)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
   // English
-  "lift","elevator","lobby","corridor","parking","staircase",
-  "guardhouse","garbage","rubbish","trash","bin room","garbage room",
+  "lift","lobby","corridor","parking","staircase","guardhouse",
+  "garbage","rubbish","trash","bin room","garbage room",
 
   // Malay
-  "rumah sampah","tong sampah","sampah","tempat buang sampah",
-  "lif","lobi","koridor","tempat letak kereta","tangga",
+  "rumah sampah","tong sampah","sampah",
+  "tempat buang sampah","lif","lobi","koridor",
+  "tempat letak kereta","tangga",
 
   // Mandarin
   "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
@@ -33,13 +34,13 @@ const COMMON_AREA_KEYWORDS = [
   "குப்பை","குப்பை அறை","லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
 ];
 
-function keywordDetectCommonArea(text: string): boolean {
+function isCommonAreaByKeyword(text: string): boolean {
   const lower = text.toLowerCase();
   return COMMON_AREA_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
 }
 
 /* =====================================================
-   AI INTENT (USED ONLY IF KEYWORD FAILS)
+   AI INTENT (PRIORITY 2 – ONLY IF KEYWORD FAILS)
 ===================================================== */
 async function aiDetectIntent(text: string): Promise<{
   intent: "unit" | "common_area" | "uncertain";
@@ -47,25 +48,21 @@ async function aiDetectIntent(text: string): Promise<{
 }> {
   if (!openai) return { intent: "uncertain", confidence: 0 };
 
-  const resp = await openai.chat.completions.create({
+  const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
       {
         role: "system",
         content:
-          "Classify maintenance issue as unit, common_area, or uncertain. Reply ONLY JSON: {\"intent\":\"\",\"confidence\":0-1}"
+          "Classify maintenance issue as unit or common_area. Reply ONLY JSON: {\"intent\":\"\",\"confidence\":0-1}"
       },
       { role: "user", content: text }
     ]
   });
 
   try {
-    const parsed = JSON.parse(resp.choices[0].message.content || "{}");
-    return {
-      intent: parsed.intent ?? "uncertain",
-      confidence: Number(parsed.confidence ?? 0)
-    };
+    return JSON.parse(response.choices[0].message.content || "{}");
   } catch {
     return { intent: "uncertain", confidence: 0 };
   }
@@ -86,9 +83,7 @@ export default async function handler(
     console.log("🚀 === TICKET INTAKE START ===");
 
     const body =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body;
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, description_raw, phone_number } = body;
 
@@ -99,48 +94,47 @@ export default async function handler(
     }
 
     /* =====================================================
-       1️⃣ VERIFY PHONE REGISTRATION (FIXED)
+       1️⃣ NORMALISE PHONE (CRITICAL FIX)
     ===================================================== */
     const normalizedPhone = phone_number.replace(/\D/g, "");
 
-    const { data: resident, error: residentError } = await supabase
+    /* =====================================================
+       2️⃣ RESIDENT LOOKUP (NO .single() BUG)
+    ===================================================== */
+    const { data: residents, error: residentError } = await supabase
       .from("residents")
       .select("unit_id, role")
       .eq("condo_id", condo_id)
-      .eq("phone_number", normalizedPhone)
-      .maybeSingle();
+      .eq("phone_number", normalizedPhone);
 
     if (residentError) {
-      console.error("❌ RESIDENT LOOKUP ERROR:", residentError);
-      return res.status(500).json({
-        error: "Resident lookup failed"
-      });
+      console.error("❌ RESIDENT QUERY ERROR:", residentError);
+      return res.status(500).json({ error: "Resident lookup failed" });
     }
 
-    if (!resident) {
+    if (!residents || residents.length === 0) {
       return res.status(403).json({
         error: "Phone number not registered with management"
       });
     }
 
-    const unit_id = resident.unit_id;
-    const isManagement = resident.role === "management";
+    const unit_id = residents[0].unit_id;
+    const isManagement = residents.some(r => r.role === "management");
 
     /* =====================================================
-       2️⃣ INTENT DETECTION (3 LAYERS)
+       3️⃣ INTENT DETECTION (3 LAYERS – FIXED)
     ===================================================== */
     let is_common_area = false;
-    let intent_source = "keyword";
+    let intent_source: "keyword" | "ai" | "management" | "confirm";
     let intent_confidence = 1;
 
-    // LAYER 1 — HARD KEYWORDS (OVERRIDE EVERYTHING)
-    if (keywordDetectCommonArea(description_raw)) {
+    // Layer 1 – KEYWORD (ABSOLUTE)
+    if (isCommonAreaByKeyword(description_raw)) {
       is_common_area = true;
       intent_source = "keyword";
       intent_confidence = 1;
     }
-
-    // LAYER 2 — AI (ONLY IF KEYWORDS FAIL)
+    // Layer 2 – AI
     else {
       const aiResult = await aiDetectIntent(description_raw);
 
@@ -149,8 +143,7 @@ export default async function handler(
         intent_source = "ai";
         intent_confidence = aiResult.confidence;
       }
-
-      // LAYER 3 — ASK RESIDENT
+      // Layer 3 – ASK RESIDENT
       else {
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
@@ -168,15 +161,15 @@ export default async function handler(
       }
     }
 
-    // MANAGEMENT OVERRIDE
-    if (isManagement && !is_common_area) {
+    // Management override
+    if (isManagement) {
       is_common_area = true;
-      intent_source = "management_override";
+      intent_source = "management";
       intent_confidence = 1;
     }
 
     /* =====================================================
-       3️⃣ INSERT TICKET
+       4️⃣ INSERT TICKET (ALWAYS)
     ===================================================== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
@@ -196,12 +189,11 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      console.error("❌ TICKET INSERT ERROR:", insertError);
-      return res.status(500).json({ error: "Ticket insert failed" });
+      throw insertError;
     }
 
     /* =====================================================
-       4️⃣ EMBEDDING
+       5️⃣ EMBEDDING (PDPA SAFE)
     ===================================================== */
     let embedding: number[] | null = null;
 
@@ -220,7 +212,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       5️⃣ DUPLICATE / RELATED DETECTION
+       6️⃣ DUPLICATE / RELATED LOGIC
     ===================================================== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
@@ -237,16 +229,13 @@ export default async function handler(
       if (matches?.length) {
         const best = matches[0];
 
-        // HARD DUPLICATE
         if (
           is_common_area ||
           best.is_common_area ||
-          (ticket.unit_id && best.unit_id === ticket.unit_id)
+          (best.unit_id && best.unit_id === ticket.unit_id)
         ) {
           duplicate_of = best.id;
-        }
-        // RELATED ISSUE
-        else {
+        } else {
           related_to = best.id;
         }
 
@@ -262,7 +251,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       6️⃣ RESPONSE
+       7️⃣ RESPONSE
     ===================================================== */
     return res.status(200).json({
       success: true,
@@ -274,7 +263,7 @@ export default async function handler(
     });
 
   } catch (err: any) {
-    console.error("🔥 UNCAUGHT ERROR:", err);
+    console.error("🔥 ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
