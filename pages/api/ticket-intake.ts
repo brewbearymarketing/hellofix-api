@@ -27,10 +27,16 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 const OWN_UNIT_KEYWORDS = [
-  "bedroom","toilet","bathroom","kitchen","sink","aircond",
-  "bilik","tandas","dapur","aircond bocor",
-  "房间","厕所","厨房","空调",
-  "அறை","குளியலறை","சமையலறை"
+  "bedroom","bathroom","kitchen","sink",
+  "bilik","dapur",
+  "房间","厨房",
+  "அறை","சமையலறை"
+];
+
+// ⚠️ AMBIGUOUS — NEVER DECIDE ALONE
+const AMBIGUOUS_KEYWORDS = [
+  "toilet","tandas","aircond","air conditioner","ac",
+  "厕所","空调","கழிப்பிடம்"
 ];
 
 function keywordMatch(text: string, keywords: string[]) {
@@ -38,8 +44,11 @@ function keywordMatch(text: string, keywords: string[]) {
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
-/* ================= AI FALLBACK ================= */
-async function aiClassify(text: string) {
+/* ================= AI FALLBACK (SAFE) ================= */
+async function aiClassify(text: string): Promise<{
+  category: "unit" | "common_area" | "mixed" | "uncertain";
+  confidence: number;
+}> {
   if (!openai) return { category: "uncertain", confidence: 0 };
 
   const r = await openai.chat.completions.create({
@@ -49,14 +58,23 @@ async function aiClassify(text: string) {
       {
         role: "system",
         content:
-          "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply JSON only."
+          "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON."
       },
       { role: "user", content: text }
     ],
     response_format: { type: "json_object" }
   });
 
-  return JSON.parse(r.choices[0].message.content || "{}");
+  try {
+    const parsed = r.choices[0]?.message?.content;
+    const obj = typeof parsed === "string" ? JSON.parse(parsed) : {};
+    return {
+      category: obj.category ?? "uncertain",
+      confidence: Number(obj.confidence ?? 0)
+    };
+  } catch {
+    return { category: "uncertain", confidence: 0 };
+  }
 }
 
 /* ================= API HANDLER ================= */
@@ -67,9 +85,8 @@ export default async function handler(
   if (req.method !== "POST") return res.status(200).json({ ok: true });
 
   try {
-    const body = typeof req.body === "string"
-      ? JSON.parse(req.body)
-      : req.body;
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number, description_raw } = body;
 
@@ -83,7 +100,7 @@ export default async function handler(
       .select("unit_id, approved")
       .eq("condo_id", condo_id)
       .eq("phone_number", phone_number)
-      .single();
+      .maybeSingle();
 
     if (!resident || !resident.approved) {
       return res.status(403).json({
@@ -93,19 +110,20 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-    /* ===== 2️⃣ INTENT DETECTION ===== */
-    let intent_category = "uncertain";
+    /* ===== 2️⃣ INTENT DETECTION (FIXED) ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
     let intent_source = "keyword";
     let intent_confidence = 1;
 
     const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
     const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
 
     if (commonHit && unitHit) {
       intent_category = "mixed";
-    } else if (commonHit) {
+    } else if (commonHit && !ambiguousHit) {
       intent_category = "common_area";
-    } else if (unitHit) {
+    } else if (unitHit && !ambiguousHit) {
       intent_category = "unit";
     } else {
       const ai = await aiClassify(description_raw);
@@ -124,7 +142,7 @@ export default async function handler(
         payload: {
           phone_number,
           message:
-            "Is this issue:\n1️⃣ Your unit\n2️⃣ Common area\n3️⃣ Both"
+            "This issue could be:\n1️⃣ Your unit\n2️⃣ Common area\n3️⃣ Both\nReply 1, 2 or 3"
         }
       });
 
@@ -154,8 +172,8 @@ export default async function handler(
       .single();
 
     /* ===== 5️⃣ EMBEDDING + DUPLICATE ===== */
-    let duplicate_of = null;
-    let related_to = null;
+    let duplicate_of: string | null = null;
+    let related_to: string | null = null;
 
     if (openai) {
       const emb = await openai.embeddings.create({
@@ -165,7 +183,8 @@ export default async function handler(
 
       const embedding = emb.data[0].embedding;
 
-      await supabase.from("tickets")
+      await supabase
+        .from("tickets")
         .update({ embedding })
         .eq("id", ticket.id);
 
@@ -179,23 +198,22 @@ export default async function handler(
 
       if (matches?.length) {
         const best = matches[0];
+
         if (
           ticket.is_common_area ||
           best.is_common_area ||
-          best.unit_id === ticket.unit_id
+          (ticket.unit_id && best.unit_id && ticket.unit_id === best.unit_id)
         ) {
           duplicate_of = best.id;
         } else {
           related_to = best.id;
         }
 
-        await supabase.from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
+        await supabase.from("tickets").update({
+          is_duplicate: !!duplicate_of,
+          duplicate_of,
+          related_to
+        }).eq("id", ticket.id);
       }
     }
 
