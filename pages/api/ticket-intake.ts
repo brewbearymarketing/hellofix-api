@@ -15,59 +15,62 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   KEYWORDS
+   COMMON AREA KEYWORDS (HARD RULES, MULTI-LANGUAGE)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
   // English
   "lift","lobby","corridor","parking","staircase","guardhouse",
+  "garbage","rubbish","trash","bin room","garbage room",
+
   // Malay
-  "lif","lobi","koridor","tempat letak kereta","tangga",
+  "rumah sampah","tong sampah","sampah",
+  "tempat buang sampah","lif","lobi","koridor",
+  "tempat letak kereta","tangga",
+
   // Mandarin
-  "电梯","大堂","走廊","停车场",
+  "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
+
   // Tamil
-  "லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
+  "குப்பை","குப்பை அறை","லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
 ];
 
-const UNIT_ROOM_KEYWORDS = [
-  // English
-  "bedroom","bathroom","toilet","kitchen","room","balcony","aircond",
-  // Malay
-  "bilik","tandas","bilik air","dapur",
-  // Mandarin
-  "房间","厕所","厨房",
-  // Tamil
-  "அறை","குளியலறை","சமையலறை"
-];
-
-function hasKeyword(text: string, keywords: string[]) {
+function keywordDetectCommonArea(text: string): boolean {
   const lower = text.toLowerCase();
-  return keywords.some(k => lower.includes(k.toLowerCase()));
+  return COMMON_AREA_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
 }
 
 /* =====================================================
-   AI INTENT (LAST RESORT ONLY)
+   AI INTENT CLASSIFICATION (SAFE)
 ===================================================== */
 async function aiDetectIntent(text: string): Promise<{
   intent: "unit" | "common_area" | "uncertain";
   confidence: number;
 }> {
-  if (!openai) return { intent: "uncertain", confidence: 0 };
+  if (!openai) {
+    return { intent: "uncertain", confidence: 0 };
+  }
 
-  const resp = await openai.chat.completions.create({
+  const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
       {
         role: "system",
         content:
-          "Classify maintenance issue as unit or common_area. Reply ONLY JSON: {intent, confidence}"
+          "Classify maintenance issue intent as unit, common_area, or uncertain. Reply ONLY in JSON: {\"intent\":\"\",\"confidence\":0-1}"
       },
       { role: "user", content: text }
     ]
   });
 
   try {
-    return JSON.parse(resp.choices[0].message.content || "{}");
+    const parsed = JSON.parse(
+      response.choices[0].message.content || "{}"
+    );
+    return {
+      intent: parsed.intent ?? "uncertain",
+      confidence: Number(parsed.confidence ?? 0)
+    };
   } catch {
     return { intent: "uncertain", confidence: 0 };
   }
@@ -96,18 +99,18 @@ export default async function handler(
 
     if (!condo_id || !description_raw || !phone_number) {
       return res.status(400).json({
-        error: "Missing condo_id, description_raw or phone_number"
+        error: "Missing condo_id, description_raw, or phone_number"
       });
     }
 
     /* =====================================================
-       1️⃣ RESOLVE PHONE → UNIT
+       1️⃣ VERIFY PHONE REGISTRATION
     ===================================================== */
     const { data: resident } = await supabase
       .from("residents")
-      .select("unit_id")
-      .eq("phone_number", phone_number)
+      .select("unit_id, role")
       .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
       .single();
 
     if (!resident) {
@@ -117,40 +120,30 @@ export default async function handler(
     }
 
     const unit_id = resident.unit_id;
+    const isManagement = resident.role === "management";
 
     /* =====================================================
-       2️⃣ INTENT DETECTION (FIXED)
+       2️⃣ INTENT DETECTION (3 LAYERS)
     ===================================================== */
     let is_common_area = false;
-    let intent_source = "rule";
+    let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // Layer 1: explicit common area
-    if (hasKeyword(description_raw, COMMON_AREA_KEYWORDS)) {
+    // Layer 1 — HARD keyword
+    if (keywordDetectCommonArea(description_raw)) {
       is_common_area = true;
     }
-
-    // Layer 2: room keywords → OWN UNIT
-    else if (hasKeyword(description_raw, UNIT_ROOM_KEYWORDS)) {
-      is_common_area = false;
-    }
-
-    // Layer 3: registered resident fallback
-    else if (unit_id) {
-      is_common_area = false;
-      intent_source = "resident_default";
-      intent_confidence = 0.9;
-    }
-
-    // Layer 4: AI (LAST RESORT)
+    // Layer 2 — AI (only if keyword fails)
     else {
-      const ai = await aiDetectIntent(description_raw);
+      const aiResult = await aiDetectIntent(description_raw);
 
-      if (ai.confidence >= 0.5) {
-        is_common_area = ai.intent === "common_area";
+      if (aiResult.confidence >= 0.75) {
+        is_common_area = aiResult.intent === "common_area";
         intent_source = "ai";
-        intent_confidence = ai.confidence;
-      } else {
+        intent_confidence = aiResult.confidence;
+      }
+      // Layer 3 — Ask resident
+      else {
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
           payload: {
@@ -167,14 +160,21 @@ export default async function handler(
       }
     }
 
+    // Management can always submit common area
+    if (isManagement && is_common_area === false) {
+      is_common_area = true;
+      intent_source = "management_override";
+      intent_confidence = 1;
+    }
+
     /* =====================================================
-       3️⃣ INSERT TICKET
+       3️⃣ INSERT TICKET (ALWAYS)
     ===================================================== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
         condo_id,
-        unit_id,
+        unit_id: is_common_area ? null : unit_id,
         description_raw,
         description_clean: description_raw,
         source: "whatsapp",
@@ -188,9 +188,7 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      return res.status(500).json({
-        error: insertError?.message || "Ticket insert failed"
-      });
+      throw insertError;
     }
 
     /* =====================================================
@@ -213,7 +211,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       5️⃣ DUPLICATE / RELATED
+       5️⃣ DUPLICATE / RELATED LOGIC
     ===================================================== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
@@ -236,7 +234,7 @@ export default async function handler(
         if (
           is_common_area ||
           best.is_common_area ||
-          (best.unit_id && best.unit_id === unit_id)
+          (best.unit_id && best.unit_id === ticket.unit_id)
         ) {
           duplicate_of = best.id;
         } else {
@@ -260,7 +258,7 @@ export default async function handler(
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      unit_id,
+      unit_id: ticket.unit_id,
       is_common_area,
       duplicate_of,
       related_to
