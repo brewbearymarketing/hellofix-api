@@ -197,23 +197,38 @@ export default async function handler(
       });
 
       if (matches?.length) {
-        const best = matches[0];
+  const best = matches[0];
 
-        if (
-          ticket.is_common_area ||
-          best.is_common_area ||
-          (ticket.unit_id && best.unit_id && ticket.unit_id === best.unit_id)
-        ) {
-          duplicate_of = best.id;
-        } else {
-          related_to = best.id;
-        }
+  // RULE 1️⃣: Common area + common area → HARD DUPLICATE
+  if (ticket.is_common_area && best.is_common_area) {
+    duplicate_of = best.id;
+  }
 
-        await supabase.from("tickets").update({
-          is_duplicate: !!duplicate_of,
-          duplicate_of,
-          related_to
-        }).eq("id", ticket.id);
+  // RULE 2️⃣: Same unit → HARD DUPLICATE
+  else if (
+    !ticket.is_common_area &&
+    !best.is_common_area &&
+    ticket.unit_id &&
+    best.unit_id &&
+    ticket.unit_id === best.unit_id
+  ) {
+    duplicate_of = best.id;
+  }
+
+  // RULE 3️⃣: Different units or mixed → RELATED
+  else {
+    related_to = best.id;
+  }
+
+  await supabase
+    .from("tickets")
+    .update({
+      is_duplicate: !!duplicate_of,
+      duplicate_of,
+      related_to
+    })
+    .eq("id", ticket.id);
+}
       }
     }
 
