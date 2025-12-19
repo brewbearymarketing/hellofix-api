@@ -3,96 +3,80 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 /* =====================================================
-   CLIENTS
+   SUPABASE CLIENT
 ===================================================== */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/* =====================================================
+   OPENAI (OPTIONAL)
+===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
 /* =====================================================
-   PHONE NORMALIZATION (FIXES r.replace ERROR)
+   SAFE PHONE NORMALIZATION (NO CRASH)
 ===================================================== */
-function normalizePhone(input: any): string {
+function normalizePhone(input: unknown): string {
   if (!input) return "";
 
-  if (typeof input === "object") {
+  let raw = "";
+
+  if (typeof input === "string") {
+    raw = input;
+  } else if (typeof input === "object") {
     if (Array.isArray(input)) {
-      input = input[0];
-    } else if ("number" in input) {
-      input = input.number;
+      raw = String(input[0] ?? "");
+    } else if ((input as any).number) {
+      raw = String((input as any).number);
+    } else {
+      raw = JSON.stringify(input);
     }
+  } else {
+    raw = String(input);
   }
 
-  return String(input).replace(/\D/g, "");
+  // remove everything except digits
+  let digits = raw.replace(/\D/g, "");
+
+  // normalize Malaysia
+  if (digits.startsWith("0")) {
+    digits = "6" + digits;
+  }
+
+  if (digits.startsWith("60")) {
+    return digits;
+  }
+
+  return digits;
 }
 
 /* =====================================================
-   COMMON AREA KEYWORDS (HARD RULES, MULTI-LANGUAGE)
+   COMMON AREA KEYWORDS (HARD RULE)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
   // English
-  "lift", "lobby", "corridor", "parking", "staircase", "guardhouse",
-  "garbage", "rubbish", "trash", "bin room", "garbage room",
+  "lift","lobby","corridor","parking","staircase","guardhouse",
+  "garbage","rubbish","trash","bin room","garbage room",
 
   // Malay
-  "rumah sampah", "tong sampah", "sampah",
-  "tempat buang sampah", "lif", "lobi", "koridor",
-  "tempat letak kereta", "tangga",
+  "rumah sampah","tong sampah","sampah",
+  "tempat buang sampah","lif","lobi","koridor",
+  "tempat letak kereta","tangga",
 
   // Mandarin
-  "垃圾房", "垃圾", "垃圾桶", "电梯", "大堂", "走廊", "停车场",
+  "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
 
   // Tamil
-  "குப்பை", "குப்பை அறை", "லிப்ட்", "நடையாலம்", "வாகன நிறுத்தம்"
+  "குப்பை","குப்பை அறை","லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
 ];
 
 function keywordDetectCommonArea(text: string): boolean {
   const lower = text.toLowerCase();
-  return COMMON_AREA_KEYWORDS.some(k =>
-    lower.includes(k.toLowerCase())
-  );
-}
-
-/* =====================================================
-   AI INTENT CLASSIFICATION (SAFE)
-===================================================== */
-async function aiDetectIntent(text: string): Promise<{
-  intent: "unit" | "common_area" | "uncertain";
-  confidence: number;
-}> {
-  if (!openai) {
-    return { intent: "uncertain", confidence: 0 };
-  }
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Classify maintenance issue intent as unit, common_area, or uncertain. Reply ONLY in JSON: {\"intent\":\"\",\"confidence\":0-1}"
-      },
-      { role: "user", content: text }
-    ]
-  });
-
-  try {
-    const parsed = JSON.parse(
-      response.choices[0].message.content || "{}"
-    );
-    return {
-      intent: parsed.intent ?? "uncertain",
-      confidence: Number(parsed.confidence ?? 0)
-    };
-  } catch {
-    return { intent: "uncertain", confidence: 0 };
-  }
+  return COMMON_AREA_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
 }
 
 /* =====================================================
@@ -123,26 +107,37 @@ export default async function handler(
     }
 
     /* =====================================================
-       1️⃣ NORMALISE PHONE & VERIFY REGISTRATION
+       1️⃣ NORMALIZE PHONE
     ===================================================== */
     const normalizedPhone = normalizePhone(phone_number);
+
+    console.log("📞 RAW PHONE:", phone_number);
     console.log("📞 NORMALIZED PHONE:", normalizedPhone);
 
+    /* =====================================================
+       2️⃣ LOOKUP RESIDENT (NO FALSE 403)
+    ===================================================== */
     const { data: resident, error: residentError } = await supabase
       .from("residents")
-      .select("unit_id, role")
+      .select("unit_id, role, phone_number")
       .eq("condo_id", condo_id)
       .eq("phone_number", normalizedPhone)
       .maybeSingle();
 
+    console.log("👤 RESIDENT RESULT:", resident);
+    console.log("👤 RESIDENT ERROR:", residentError);
+
     if (residentError) {
-      console.error("❌ Resident lookup error:", residentError);
-      return res.status(500).json({ error: "Resident lookup failed" });
+      return res.status(500).json({
+        error: "Resident lookup failed",
+        detail: residentError.message
+      });
     }
 
     if (!resident) {
       return res.status(403).json({
-        error: "Phone number not registered with management"
+        error: "Phone number not registered with management",
+        phone_used: normalizedPhone
       });
     }
 
@@ -150,42 +145,17 @@ export default async function handler(
     const isManagement = resident.role === "management";
 
     /* =====================================================
-       2️⃣ INTENT DETECTION (3 LAYERS)
+       3️⃣ INTENT DETECTION (KEYWORD FIRST)
     ===================================================== */
     let is_common_area = false;
     let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // Layer 1 — HARD keyword
     if (keywordDetectCommonArea(description_raw)) {
       is_common_area = true;
-    } else {
-      // Layer 2 — AI
-      const aiResult = await aiDetectIntent(description_raw);
-
-      if (aiResult.confidence >= 0.75) {
-        is_common_area = aiResult.intent === "common_area";
-        intent_source = "ai";
-        intent_confidence = aiResult.confidence;
-      } else {
-        // Layer 3 — Ask resident
-        await supabase.from("ticket_events").insert({
-          event_type: "awaiting_intent_confirmation",
-          payload: {
-            phone_number: normalizedPhone,
-            message:
-              "Is this issue related to:\n1️⃣ Your unit\n2️⃣ Common area\nReply 1 or 2"
-          }
-        });
-
-        return res.status(202).json({
-          pending: true,
-          message: "Awaiting resident confirmation"
-        });
-      }
     }
 
-    // Management override
+    // management override
     if (isManagement) {
       is_common_area = true;
       intent_source = "management_override";
@@ -193,7 +163,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       3️⃣ INSERT TICKET
+       4️⃣ INSERT TICKET
     ===================================================== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
@@ -217,77 +187,16 @@ export default async function handler(
       return res.status(500).json({ error: "Ticket insert failed" });
     }
 
-    /* =====================================================
-       4️⃣ EMBEDDING
-    ===================================================== */
-    let embedding: number[] | null = null;
-
-    if (openai) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_raw
-      });
-
-      embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-    }
+    console.log("✅ TICKET CREATED:", ticket.id);
 
     /* =====================================================
-       5️⃣ DUPLICATE / RELATED LOGIC
-    ===================================================== */
-    let duplicate_of: string | null = null;
-    let related_to: string | null = null;
-
-    if (embedding) {
-      const { data: matches } = await supabase.rpc(
-        "match_tickets",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          exclude_id: ticket.id,
-          match_threshold: 0.85,
-          match_count: 1
-        }
-      );
-
-      if (matches?.length) {
-        const best = matches[0];
-
-        if (
-          is_common_area ||
-          best.is_common_area ||
-          (best.unit_id && best.unit_id === ticket.unit_id)
-        ) {
-          duplicate_of = best.id;
-        } else {
-          related_to = best.id;
-        }
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
-      }
-    }
-
-    /* =====================================================
-       6️⃣ RESPONSE
+       5️⃣ RESPONSE (NO EMBEDDING YET – STABLE BASE)
     ===================================================== */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
       unit_id: ticket.unit_id,
-      is_common_area,
-      duplicate_of,
-      related_to
+      is_common_area
     });
 
   } catch (err: any) {
