@@ -230,7 +230,6 @@ export default async function handler(
     .eq("id", ticket.id);
 }
       }
-    }
 
     /* ===== 6️⃣ ASK FOR PHOTO ===== */
     await supabase.from("ticket_events").insert({
