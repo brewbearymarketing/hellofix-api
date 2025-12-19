@@ -15,17 +15,16 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   COMMON AREA KEYWORDS (HARD RULES, MULTI-LANGUAGE)
+   COMMON AREA KEYWORDS (HARD OVERRIDE, MULTI-LANGUAGE)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
   // English
-  "lift","lobby","corridor","parking","staircase","guardhouse",
-  "garbage","rubbish","trash","bin room","garbage room",
+  "lift","elevator","lobby","corridor","parking","staircase",
+  "guardhouse","garbage","rubbish","trash","bin room","garbage room",
 
   // Malay
-  "rumah sampah","tong sampah","sampah",
-  "tempat buang sampah","lif","lobi","koridor",
-  "tempat letak kereta","tangga",
+  "rumah sampah","tong sampah","sampah","tempat buang sampah",
+  "lif","lobi","koridor","tempat letak kereta","tangga",
 
   // Mandarin
   "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
@@ -40,33 +39,29 @@ function keywordDetectCommonArea(text: string): boolean {
 }
 
 /* =====================================================
-   AI INTENT CLASSIFICATION (SAFE)
+   AI INTENT (USED ONLY IF KEYWORD FAILS)
 ===================================================== */
 async function aiDetectIntent(text: string): Promise<{
   intent: "unit" | "common_area" | "uncertain";
   confidence: number;
 }> {
-  if (!openai) {
-    return { intent: "uncertain", confidence: 0 };
-  }
+  if (!openai) return { intent: "uncertain", confidence: 0 };
 
-  const response = await openai.chat.completions.create({
+  const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
       {
         role: "system",
         content:
-          "Classify maintenance issue intent as unit, common_area, or uncertain. Reply ONLY in JSON: {\"intent\":\"\",\"confidence\":0-1}"
+          "Classify maintenance issue as unit, common_area, or uncertain. Reply ONLY JSON: {\"intent\":\"\",\"confidence\":0-1}"
       },
       { role: "user", content: text }
     ]
   });
 
   try {
-    const parsed = JSON.parse(
-      response.choices[0].message.content || "{}"
-    );
+    const parsed = JSON.parse(resp.choices[0].message.content || "{}");
     return {
       intent: parsed.intent ?? "uncertain",
       confidence: Number(parsed.confidence ?? 0)
@@ -104,14 +99,23 @@ export default async function handler(
     }
 
     /* =====================================================
-       1️⃣ VERIFY PHONE REGISTRATION
+       1️⃣ VERIFY PHONE REGISTRATION (FIXED)
     ===================================================== */
-    const { data: resident } = await supabase
+    const normalizedPhone = phone_number.replace(/\D/g, "");
+
+    const { data: resident, error: residentError } = await supabase
       .from("residents")
       .select("unit_id, role")
       .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .single();
+      .eq("phone_number", normalizedPhone)
+      .maybeSingle();
+
+    if (residentError) {
+      console.error("❌ RESIDENT LOOKUP ERROR:", residentError);
+      return res.status(500).json({
+        error: "Resident lookup failed"
+      });
+    }
 
     if (!resident) {
       return res.status(403).json({
@@ -129,11 +133,14 @@ export default async function handler(
     let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // Layer 1 — HARD keyword
+    // LAYER 1 — HARD KEYWORDS (OVERRIDE EVERYTHING)
     if (keywordDetectCommonArea(description_raw)) {
       is_common_area = true;
+      intent_source = "keyword";
+      intent_confidence = 1;
     }
-    // Layer 2 — AI (only if keyword fails)
+
+    // LAYER 2 — AI (ONLY IF KEYWORDS FAIL)
     else {
       const aiResult = await aiDetectIntent(description_raw);
 
@@ -142,12 +149,13 @@ export default async function handler(
         intent_source = "ai";
         intent_confidence = aiResult.confidence;
       }
-      // Layer 3 — Ask resident
+
+      // LAYER 3 — ASK RESIDENT
       else {
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
           payload: {
-            phone_number,
+            phone_number: normalizedPhone,
             message:
               "Is this issue related to:\n1️⃣ Your unit\n2️⃣ Common area\nReply 1 or 2"
           }
@@ -160,15 +168,15 @@ export default async function handler(
       }
     }
 
-    // Management can always submit common area
-    if (isManagement && is_common_area === false) {
+    // MANAGEMENT OVERRIDE
+    if (isManagement && !is_common_area) {
       is_common_area = true;
       intent_source = "management_override";
       intent_confidence = 1;
     }
 
     /* =====================================================
-       3️⃣ INSERT TICKET (ALWAYS)
+       3️⃣ INSERT TICKET
     ===================================================== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
@@ -188,7 +196,8 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      throw insertError;
+      console.error("❌ TICKET INSERT ERROR:", insertError);
+      return res.status(500).json({ error: "Ticket insert failed" });
     }
 
     /* =====================================================
@@ -211,33 +220,33 @@ export default async function handler(
     }
 
     /* =====================================================
-       5️⃣ DUPLICATE / RELATED LOGIC
+       5️⃣ DUPLICATE / RELATED DETECTION
     ===================================================== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
     if (embedding) {
-      const { data: matches } = await supabase.rpc(
-        "match_tickets",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          exclude_id: ticket.id,
-          match_threshold: 0.85,
-          match_count: 1
-        }
-      );
+      const { data: matches } = await supabase.rpc("match_tickets", {
+        query_embedding: embedding,
+        condo_filter: condo_id,
+        exclude_id: ticket.id,
+        match_threshold: 0.85,
+        match_count: 1
+      });
 
       if (matches?.length) {
         const best = matches[0];
 
+        // HARD DUPLICATE
         if (
           is_common_area ||
           best.is_common_area ||
-          (best.unit_id && best.unit_id === ticket.unit_id)
+          (ticket.unit_id && best.unit_id === ticket.unit_id)
         ) {
           duplicate_of = best.id;
-        } else {
+        }
+        // RELATED ISSUE
+        else {
           related_to = best.id;
         }
 
@@ -265,7 +274,7 @@ export default async function handler(
     });
 
   } catch (err: any) {
-    console.error("🔥 ERROR:", err);
+    console.error("🔥 UNCAUGHT ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
