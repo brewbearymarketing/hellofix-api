@@ -2,205 +2,223 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
-/* =====================================================
-   SUPABASE CLIENT
-===================================================== */
+/* ================= CLIENTS ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/* =====================================================
-   OPENAI (OPTIONAL)
-===================================================== */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-/* =====================================================
-   SAFE PHONE NORMALIZATION (NO CRASH)
-===================================================== */
-function normalizePhone(input: unknown): string {
-  if (!input) return "";
-
-  let raw = "";
-
-  if (typeof input === "string") {
-    raw = input;
-  } else if (typeof input === "object") {
-    if (Array.isArray(input)) {
-      raw = String(input[0] ?? "");
-    } else if ((input as any).number) {
-      raw = String((input as any).number);
-    } else {
-      raw = JSON.stringify(input);
-    }
-  } else {
-    raw = String(input);
-  }
-
-  // remove everything except digits
-  let digits = raw.replace(/\D/g, "");
-
-  // normalize Malaysia
-  if (digits.startsWith("0")) {
-    digits = "6" + digits;
-  }
-
-  if (digits.startsWith("60")) {
-    return digits;
-  }
-
-  return digits;
-}
-
-/* =====================================================
-   COMMON AREA KEYWORDS (HARD RULE)
-===================================================== */
+/* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   // English
-  "lift","lobby","corridor","parking","staircase","guardhouse",
-  "garbage","rubbish","trash","bin room","garbage room",
-
+  "lobby","lift","elevator","parking","corridor","staircase",
+  "garbage","trash","bin room","pool","gym",
   // Malay
-  "rumah sampah","tong sampah","sampah",
-  "tempat buang sampah","lif","lobi","koridor",
-  "tempat letak kereta","tangga",
-
+  "lif","lobi","koridor","tangga","tempat letak kereta",
+  "rumah sampah","tong sampah",
   // Mandarin
-  "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
-
+  "电梯","走廊","停车场","垃圾房","泳池",
   // Tamil
-  "குப்பை","குப்பை அறை","லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
+  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
 ];
 
-function keywordDetectCommonArea(text: string): boolean {
-  const lower = text.toLowerCase();
-  return COMMON_AREA_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
+const OWN_UNIT_KEYWORDS = [
+  "bedroom","toilet","bathroom","kitchen","sink","aircond",
+  "bilik","tandas","dapur","aircond bocor",
+  "房间","厕所","厨房","空调",
+  "அறை","குளியலறை","சமையலறை"
+];
+
+function keywordMatch(text: string, keywords: string[]) {
+  const t = text.toLowerCase();
+  return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
-/* =====================================================
-   API HANDLER
-===================================================== */
+/* ================= AI FALLBACK ================= */
+async function aiClassify(text: string) {
+  if (!openai) return { category: "uncertain", confidence: 0 };
+
+  const r = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply JSON only."
+      },
+      { role: "user", content: text }
+    ],
+    response_format: { type: "json_object" }
+  });
+
+  return JSON.parse(r.choices[0].message.content || "{}");
+}
+
+/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(200).json({ ok: true });
-  }
+  if (req.method !== "POST") return res.status(200).json({ ok: true });
 
   try {
-    console.log("🚀 === TICKET INTAKE START ===");
+    const body = typeof req.body === "string"
+      ? JSON.parse(req.body)
+      : req.body;
 
-    const body =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body;
+    const { condo_id, phone_number, description_raw } = body;
 
-    const { condo_id, description_raw, phone_number } = body;
-
-    if (!condo_id || !description_raw || !phone_number) {
-      return res.status(400).json({
-        error: "Missing condo_id, description_raw, or phone_number"
-      });
+    if (!condo_id || !phone_number || !description_raw) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* =====================================================
-       1️⃣ NORMALIZE PHONE
-    ===================================================== */
-    const normalizedPhone = normalizePhone(phone_number);
-
-    console.log("📞 RAW PHONE:", phone_number);
-    console.log("📞 NORMALIZED PHONE:", normalizedPhone);
-
-    /* =====================================================
-       2️⃣ LOOKUP RESIDENT (NO FALSE 403)
-    ===================================================== */
-    const { data: resident, error: residentError } = await supabase
+    /* ===== 1️⃣ VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
       .from("residents")
-      .select("unit_id, role, phone_number")
+      .select("unit_id, approved")
       .eq("condo_id", condo_id)
-      .eq("phone_number", normalizedPhone)
-      .maybeSingle();
+      .eq("phone_number", phone_number)
+      .single();
 
-    console.log("👤 RESIDENT RESULT:", resident);
-    console.log("👤 RESIDENT ERROR:", residentError);
-
-    if (residentError) {
-      return res.status(500).json({
-        error: "Resident lookup failed",
-        detail: residentError.message
-      });
-    }
-
-    if (!resident) {
+    if (!resident || !resident.approved) {
       return res.status(403).json({
-        error: "Phone number not registered with management",
-        phone_used: normalizedPhone
+        error: "Phone number not approved by management"
       });
     }
 
     const unit_id = resident.unit_id;
-    const isManagement = resident.role === "management";
 
-    /* =====================================================
-       3️⃣ INTENT DETECTION (KEYWORD FIRST)
-    ===================================================== */
-    let is_common_area = false;
+    /* ===== 2️⃣ INTENT DETECTION ===== */
+    let intent_category = "uncertain";
     let intent_source = "keyword";
     let intent_confidence = 1;
 
-    if (keywordDetectCommonArea(description_raw)) {
-      is_common_area = true;
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+    } else if (commonHit) {
+      intent_category = "common_area";
+    } else if (unitHit) {
+      intent_category = "unit";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
     }
 
-    // management override
-    if (isManagement) {
-      is_common_area = true;
-      intent_source = "management_override";
-      intent_confidence = 1;
+    /* ===== 3️⃣ ASK USER IF STILL UNCERTAIN ===== */
+    if (intent_category === "uncertain") {
+      await supabase.from("ticket_events").insert({
+        event_type: "ask_intent",
+        event_state: "awaiting_intent",
+        payload: {
+          phone_number,
+          message:
+            "Is this issue:\n1️⃣ Your unit\n2️⃣ Common area\n3️⃣ Both"
+        }
+      });
+
+      return res.status(202).json({
+        pending: true,
+        message: "Awaiting user intent confirmation"
+      });
     }
 
-    /* =====================================================
-       4️⃣ INSERT TICKET
-    ===================================================== */
-    const { data: ticket, error: insertError } = await supabase
+    /* ===== 4️⃣ INSERT TICKET ===== */
+    const { data: ticket } = await supabase
       .from("tickets")
       .insert({
         condo_id,
-        unit_id: is_common_area ? null : unit_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
         description_raw,
         description_clean: description_raw,
         source: "whatsapp",
         status: "new",
-        is_common_area,
-        is_duplicate: false,
+        is_common_area: intent_category === "common_area",
+        intent_category,
         intent_source,
-        intent_confidence
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
       .select()
       .single();
 
-    if (insertError || !ticket) {
-      console.error("❌ Ticket insert failed:", insertError);
-      return res.status(500).json({ error: "Ticket insert failed" });
+    /* ===== 5️⃣ EMBEDDING + DUPLICATE ===== */
+    let duplicate_of = null;
+    let related_to = null;
+
+    if (openai) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description_raw
+      });
+
+      const embedding = emb.data[0].embedding;
+
+      await supabase.from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
+
+      const { data: matches } = await supabase.rpc("match_tickets", {
+        query_embedding: embedding,
+        condo_filter: condo_id,
+        exclude_id: ticket.id,
+        match_threshold: 0.85,
+        match_count: 1
+      });
+
+      if (matches?.length) {
+        const best = matches[0];
+        if (
+          ticket.is_common_area ||
+          best.is_common_area ||
+          best.unit_id === ticket.unit_id
+        ) {
+          duplicate_of = best.id;
+        } else {
+          related_to = best.id;
+        }
+
+        await supabase.from("tickets")
+          .update({
+            is_duplicate: !!duplicate_of,
+            duplicate_of,
+            related_to
+          })
+          .eq("id", ticket.id);
+      }
     }
 
-    console.log("✅ TICKET CREATED:", ticket.id);
+    /* ===== 6️⃣ ASK FOR PHOTO ===== */
+    await supabase.from("ticket_events").insert({
+      event_type: "ask_photo",
+      event_state: "awaiting_photo",
+      payload: {
+        phone_number,
+        message: "Do you have photo evidence? Reply YES or NO."
+      }
+    });
 
-    /* =====================================================
-       5️⃣ RESPONSE (NO EMBEDDING YET – STABLE BASE)
-    ===================================================== */
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      unit_id: ticket.unit_id,
-      is_common_area
+      intent_category,
+      duplicate_of,
+      related_to
     });
 
   } catch (err: any) {
-    console.error("🔥 UNCAUGHT ERROR:", err);
+    console.error("🔥 ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
