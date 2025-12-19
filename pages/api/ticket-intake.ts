@@ -15,32 +15,51 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   COMMON AREA KEYWORDS (HARD RULES – MULTI LANGUAGE)
+   PHONE NORMALIZATION (FIXES r.replace ERROR)
 ===================================================== */
-const COMMON_AREA_KEYWORDS = [
-  // English
-  "lift","lobby","corridor","parking","staircase","guardhouse",
-  "garbage","rubbish","trash","bin room","garbage room",
+function normalizePhone(input: any): string {
+  if (!input) return "";
 
-  // Malay
-  "rumah sampah","tong sampah","sampah",
-  "tempat buang sampah","lif","lobi","koridor",
-  "tempat letak kereta","tangga",
+  if (typeof input === "object") {
+    if (Array.isArray(input)) {
+      input = input[0];
+    } else if ("number" in input) {
+      input = input.number;
+    }
+  }
 
-  // Mandarin
-  "垃圾房","垃圾","垃圾桶","电梯","大堂","走廊","停车场",
-
-  // Tamil
-  "குப்பை","குப்பை அறை","லிப்ட்","நடையாலம்","வாகன நிறுத்தம்"
-];
-
-function isCommonAreaByKeyword(text: string): boolean {
-  const t = text.toLowerCase();
-  return COMMON_AREA_KEYWORDS.some(k => t.includes(k.toLowerCase()));
+  return String(input).replace(/\D/g, "");
 }
 
 /* =====================================================
-   AI INTENT (ONLY IF KEYWORD FAILS)
+   COMMON AREA KEYWORDS (HARD RULES, MULTI-LANGUAGE)
+===================================================== */
+const COMMON_AREA_KEYWORDS = [
+  // English
+  "lift", "lobby", "corridor", "parking", "staircase", "guardhouse",
+  "garbage", "rubbish", "trash", "bin room", "garbage room",
+
+  // Malay
+  "rumah sampah", "tong sampah", "sampah",
+  "tempat buang sampah", "lif", "lobi", "koridor",
+  "tempat letak kereta", "tangga",
+
+  // Mandarin
+  "垃圾房", "垃圾", "垃圾桶", "电梯", "大堂", "走廊", "停车场",
+
+  // Tamil
+  "குப்பை", "குப்பை அறை", "லிப்ட்", "நடையாலம்", "வாகன நிறுத்தம்"
+];
+
+function keywordDetectCommonArea(text: string): boolean {
+  const lower = text.toLowerCase();
+  return COMMON_AREA_KEYWORDS.some(k =>
+    lower.includes(k.toLowerCase())
+  );
+}
+
+/* =====================================================
+   AI INTENT CLASSIFICATION (SAFE)
 ===================================================== */
 async function aiDetectIntent(text: string): Promise<{
   intent: "unit" | "common_area" | "uncertain";
@@ -50,7 +69,7 @@ async function aiDetectIntent(text: string): Promise<{
     return { intent: "uncertain", confidence: 0 };
   }
 
-  const res = await openai.chat.completions.create({
+  const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
@@ -64,7 +83,9 @@ async function aiDetectIntent(text: string): Promise<{
   });
 
   try {
-    const parsed = JSON.parse(res.choices[0].message.content || "{}");
+    const parsed = JSON.parse(
+      response.choices[0].message.content || "{}"
+    );
     return {
       intent: parsed.intent ?? "uncertain",
       confidence: Number(parsed.confidence ?? 0)
@@ -102,15 +123,11 @@ export default async function handler(
     }
 
     /* =====================================================
-       1️⃣ NORMALIZE PHONE NUMBER (FIXES YOUR ERROR)
+       1️⃣ NORMALISE PHONE & VERIFY REGISTRATION
     ===================================================== */
-    const normalizedPhone = String(phone_number).replace(/\D/g, "");
+    const normalizedPhone = normalizePhone(phone_number);
+    console.log("📞 NORMALIZED PHONE:", normalizedPhone);
 
-    console.log("📞 Normalized phone:", normalizedPhone);
-
-    /* =====================================================
-       2️⃣ RESIDENT LOOKUP
-    ===================================================== */
     const { data: resident, error: residentError } = await supabase
       .from("residents")
       .select("unit_id, role")
@@ -119,7 +136,7 @@ export default async function handler(
       .maybeSingle();
 
     if (residentError) {
-      console.error("❌ Resident lookup error", residentError);
+      console.error("❌ Resident lookup error:", residentError);
       return res.status(500).json({ error: "Resident lookup failed" });
     }
 
@@ -133,29 +150,25 @@ export default async function handler(
     const isManagement = resident.role === "management";
 
     /* =====================================================
-       3️⃣ INTENT DETECTION (3 LAYERS – STRICT ORDER)
+       2️⃣ INTENT DETECTION (3 LAYERS)
     ===================================================== */
     let is_common_area = false;
     let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // LAYER 1 — HARD KEYWORD (OVERRIDES EVERYTHING)
-    if (isCommonAreaByKeyword(description_raw)) {
+    // Layer 1 — HARD keyword
+    if (keywordDetectCommonArea(description_raw)) {
       is_common_area = true;
-      intent_source = "keyword";
-      intent_confidence = 1;
-    }
-    // LAYER 2 — AI (ONLY IF KEYWORD FAILS)
-    else {
-      const ai = await aiDetectIntent(description_raw);
+    } else {
+      // Layer 2 — AI
+      const aiResult = await aiDetectIntent(description_raw);
 
-      if (ai.confidence >= 0.75) {
-        is_common_area = ai.intent === "common_area";
+      if (aiResult.confidence >= 0.75) {
+        is_common_area = aiResult.intent === "common_area";
         intent_source = "ai";
-        intent_confidence = ai.confidence;
-      }
-      // LAYER 3 — ASK RESIDENT
-      else {
+        intent_confidence = aiResult.confidence;
+      } else {
+        // Layer 3 — Ask resident
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
           payload: {
@@ -180,7 +193,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       4️⃣ INSERT TICKET (ALWAYS)
+       3️⃣ INSERT TICKET
     ===================================================== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
@@ -200,12 +213,12 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      console.error("❌ Ticket insert failed", insertError);
+      console.error("❌ Ticket insert failed:", insertError);
       return res.status(500).json({ error: "Ticket insert failed" });
     }
 
     /* =====================================================
-       5️⃣ EMBEDDING
+       4️⃣ EMBEDDING
     ===================================================== */
     let embedding: number[] | null = null;
 
@@ -224,7 +237,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       6️⃣ DUPLICATE / RELATED
+       5️⃣ DUPLICATE / RELATED LOGIC
     ===================================================== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
@@ -266,7 +279,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       7️⃣ RESPONSE
+       6️⃣ RESPONSE
     ===================================================== */
     return res.status(200).json({
       success: true,
@@ -278,7 +291,7 @@ export default async function handler(
     });
 
   } catch (err: any) {
-    console.error("🔥 ERROR:", err);
+    console.error("🔥 UNCAUGHT ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
