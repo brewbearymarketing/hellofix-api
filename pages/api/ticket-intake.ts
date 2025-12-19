@@ -33,7 +33,7 @@ const OWN_UNIT_KEYWORDS = [
   "அறை","சமையலறை"
 ];
 
-// ⚠️ AMBIGUOUS — NEVER DECIDE ALONE
+// ⚠️ Ambiguous — must NOT auto decide
 const AMBIGUOUS_KEYWORDS = [
   "toilet","tandas","aircond","air conditioner","ac",
   "厕所","空调","கழிப்பிடம்"
@@ -44,30 +44,31 @@ function keywordMatch(text: string, keywords: string[]) {
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
-/* ================= AI FALLBACK (SAFE) ================= */
+/* ================= AI FALLBACK ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
 }> {
   if (!openai) return { category: "uncertain", confidence: 0 };
 
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON."
-      },
-      { role: "user", content: text }
-    ],
-    response_format: { type: "json_object" }
-  });
-
   try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON."
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
     const parsed = r.choices[0]?.message?.content;
     const obj = typeof parsed === "string" ? JSON.parse(parsed) : {};
+
     return {
       category: obj.category ?? "uncertain",
       confidence: Number(obj.confidence ?? 0)
@@ -82,7 +83,9 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") return res.status(200).json({ ok: true });
+  if (req.method !== "POST") {
+    return res.status(200).json({ ok: true });
+  }
 
   try {
     const body =
@@ -110,7 +113,7 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-    /* ===== 2️⃣ INTENT DETECTION (FIXED) ===== */
+    /* ===== 2️⃣ INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
     let intent_source = "keyword";
     let intent_confidence = 1;
@@ -134,7 +137,7 @@ export default async function handler(
       }
     }
 
-    /* ===== 3️⃣ ASK USER IF STILL UNCERTAIN ===== */
+    /* ===== 3️⃣ ASK USER IF UNCERTAIN ===== */
     if (intent_category === "uncertain") {
       await supabase.from("ticket_events").insert({
         event_type: "ask_intent",
@@ -153,7 +156,7 @@ export default async function handler(
     }
 
     /* ===== 4️⃣ INSERT TICKET ===== */
-    const { data: ticket } = await supabase
+    const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
         condo_id,
@@ -171,7 +174,11 @@ export default async function handler(
       .select()
       .single();
 
-    /* ===== 5️⃣ EMBEDDING + DUPLICATE ===== */
+    if (insertError || !ticket) {
+      throw insertError;
+    }
+
+    /* ===== 5️⃣ EMBEDDING + DUPLICATE LOGIC ===== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
@@ -197,39 +204,37 @@ export default async function handler(
       });
 
       if (matches?.length) {
-  const best = matches[0];
+        const best = matches[0];
 
-  // RULE 1️⃣: Common area + common area → HARD DUPLICATE
-  if (ticket.is_common_area && best.is_common_area) {
-    duplicate_of = best.id;
-  }
+        // 🔴 Hard duplicate: common area
+        if (ticket.is_common_area && best.is_common_area) {
+          duplicate_of = best.id;
+        }
+        // 🔴 Hard duplicate: same unit
+        else if (
+          !ticket.is_common_area &&
+          !best.is_common_area &&
+          ticket.unit_id &&
+          best.unit_id &&
+          ticket.unit_id === best.unit_id
+        ) {
+          duplicate_of = best.id;
+        }
+        // 🟡 Related: different units
+        else {
+          related_to = best.id;
+        }
 
-  // RULE 2️⃣: Same unit → HARD DUPLICATE
-  else if (
-    !ticket.is_common_area &&
-    !best.is_common_area &&
-    ticket.unit_id &&
-    best.unit_id &&
-    ticket.unit_id === best.unit_id
-  ) {
-    duplicate_of = best.id;
-  }
-
-  // RULE 3️⃣: Different units or mixed → RELATED
-  else {
-    related_to = best.id;
-  }
-
-  await supabase
-    .from("tickets")
-    .update({
-      is_duplicate: !!duplicate_of,
-      duplicate_of,
-      related_to
-    })
-    .eq("id", ticket.id);
-}
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: !!duplicate_of,
+            duplicate_of,
+            related_to
+          })
+          .eq("id", ticket.id);
       }
+    }
 
     /* ===== 6️⃣ ASK FOR PHOTO ===== */
     await supabase.from("ticket_events").insert({
