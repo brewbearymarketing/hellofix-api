@@ -15,7 +15,7 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 /* =====================================================
-   COMMON AREA KEYWORDS (HARD RULES – PRIORITY 1)
+   COMMON AREA KEYWORDS (HARD RULES – MULTI LANGUAGE)
 ===================================================== */
 const COMMON_AREA_KEYWORDS = [
   // English
@@ -35,34 +35,40 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 function isCommonAreaByKeyword(text: string): boolean {
-  const lower = text.toLowerCase();
-  return COMMON_AREA_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
+  const t = text.toLowerCase();
+  return COMMON_AREA_KEYWORDS.some(k => t.includes(k.toLowerCase()));
 }
 
 /* =====================================================
-   AI INTENT (PRIORITY 2 – ONLY IF KEYWORD FAILS)
+   AI INTENT (ONLY IF KEYWORD FAILS)
 ===================================================== */
 async function aiDetectIntent(text: string): Promise<{
   intent: "unit" | "common_area" | "uncertain";
   confidence: number;
 }> {
-  if (!openai) return { intent: "uncertain", confidence: 0 };
+  if (!openai) {
+    return { intent: "uncertain", confidence: 0 };
+  }
 
-  const response = await openai.chat.completions.create({
+  const res = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
     messages: [
       {
         role: "system",
         content:
-          "Classify maintenance issue as unit or common_area. Reply ONLY JSON: {\"intent\":\"\",\"confidence\":0-1}"
+          "Classify maintenance issue intent as unit, common_area, or uncertain. Reply ONLY in JSON: {\"intent\":\"\",\"confidence\":0-1}"
       },
       { role: "user", content: text }
     ]
   });
 
   try {
-    return JSON.parse(response.choices[0].message.content || "{}");
+    const parsed = JSON.parse(res.choices[0].message.content || "{}");
+    return {
+      intent: parsed.intent ?? "uncertain",
+      confidence: Number(parsed.confidence ?? 0)
+    };
   } catch {
     return { intent: "uncertain", confidence: 0 };
   }
@@ -83,7 +89,9 @@ export default async function handler(
     console.log("🚀 === TICKET INTAKE START ===");
 
     const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+      typeof req.body === "string"
+        ? JSON.parse(req.body)
+        : req.body;
 
     const { condo_id, description_raw, phone_number } = body;
 
@@ -94,56 +102,59 @@ export default async function handler(
     }
 
     /* =====================================================
-       1️⃣ NORMALISE PHONE (CRITICAL FIX)
+       1️⃣ NORMALIZE PHONE NUMBER (FIXES YOUR ERROR)
     ===================================================== */
-    const normalizedPhone = phone_number.replace(/\D/g, "");
+    const normalizedPhone = String(phone_number).replace(/\D/g, "");
+
+    console.log("📞 Normalized phone:", normalizedPhone);
 
     /* =====================================================
-       2️⃣ RESIDENT LOOKUP (NO .single() BUG)
+       2️⃣ RESIDENT LOOKUP
     ===================================================== */
-    const { data: residents, error: residentError } = await supabase
+    const { data: resident, error: residentError } = await supabase
       .from("residents")
       .select("unit_id, role")
       .eq("condo_id", condo_id)
-      .eq("phone_number", normalizedPhone);
+      .eq("phone_number", normalizedPhone)
+      .maybeSingle();
 
     if (residentError) {
-      console.error("❌ RESIDENT QUERY ERROR:", residentError);
+      console.error("❌ Resident lookup error", residentError);
       return res.status(500).json({ error: "Resident lookup failed" });
     }
 
-    if (!residents || residents.length === 0) {
+    if (!resident) {
       return res.status(403).json({
         error: "Phone number not registered with management"
       });
     }
 
-    const unit_id = residents[0].unit_id;
-    const isManagement = residents.some(r => r.role === "management");
+    const unit_id = resident.unit_id;
+    const isManagement = resident.role === "management";
 
     /* =====================================================
-       3️⃣ INTENT DETECTION (3 LAYERS – FIXED)
+       3️⃣ INTENT DETECTION (3 LAYERS – STRICT ORDER)
     ===================================================== */
     let is_common_area = false;
-    let intent_source: "keyword" | "ai" | "management" | "confirm";
+    let intent_source = "keyword";
     let intent_confidence = 1;
 
-    // Layer 1 – KEYWORD (ABSOLUTE)
+    // LAYER 1 — HARD KEYWORD (OVERRIDES EVERYTHING)
     if (isCommonAreaByKeyword(description_raw)) {
       is_common_area = true;
       intent_source = "keyword";
       intent_confidence = 1;
     }
-    // Layer 2 – AI
+    // LAYER 2 — AI (ONLY IF KEYWORD FAILS)
     else {
-      const aiResult = await aiDetectIntent(description_raw);
+      const ai = await aiDetectIntent(description_raw);
 
-      if (aiResult.confidence >= 0.75) {
-        is_common_area = aiResult.intent === "common_area";
+      if (ai.confidence >= 0.75) {
+        is_common_area = ai.intent === "common_area";
         intent_source = "ai";
-        intent_confidence = aiResult.confidence;
+        intent_confidence = ai.confidence;
       }
-      // Layer 3 – ASK RESIDENT
+      // LAYER 3 — ASK RESIDENT
       else {
         await supabase.from("ticket_events").insert({
           event_type: "awaiting_intent_confirmation",
@@ -164,7 +175,7 @@ export default async function handler(
     // Management override
     if (isManagement) {
       is_common_area = true;
-      intent_source = "management";
+      intent_source = "management_override";
       intent_confidence = 1;
     }
 
@@ -189,11 +200,12 @@ export default async function handler(
       .single();
 
     if (insertError || !ticket) {
-      throw insertError;
+      console.error("❌ Ticket insert failed", insertError);
+      return res.status(500).json({ error: "Ticket insert failed" });
     }
 
     /* =====================================================
-       5️⃣ EMBEDDING (PDPA SAFE)
+       5️⃣ EMBEDDING
     ===================================================== */
     let embedding: number[] | null = null;
 
@@ -212,19 +224,22 @@ export default async function handler(
     }
 
     /* =====================================================
-       6️⃣ DUPLICATE / RELATED LOGIC
+       6️⃣ DUPLICATE / RELATED
     ===================================================== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
     if (embedding) {
-      const { data: matches } = await supabase.rpc("match_tickets", {
-        query_embedding: embedding,
-        condo_filter: condo_id,
-        exclude_id: ticket.id,
-        match_threshold: 0.85,
-        match_count: 1
-      });
+      const { data: matches } = await supabase.rpc(
+        "match_tickets",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          exclude_id: ticket.id,
+          match_threshold: 0.85,
+          match_count: 1
+        }
+      );
 
       if (matches?.length) {
         const best = matches[0];
