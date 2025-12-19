@@ -33,7 +33,7 @@ const OWN_UNIT_KEYWORDS = [
   "அறை","சமையலறை"
 ];
 
-// ⚠️ Ambiguous — must NOT auto decide
+// ⚠️ AMBIGUOUS — NEVER AUTO DECIDE
 const AMBIGUOUS_KEYWORDS = [
   "toilet","tandas","aircond","air conditioner","ac",
   "厕所","空调","கழிப்பிடம்"
@@ -137,25 +137,7 @@ export default async function handler(
       }
     }
 
-    /* ===== 3️⃣ ASK USER IF UNCERTAIN ===== */
-    if (intent_category === "uncertain") {
-      await supabase.from("ticket_events").insert({
-        event_type: "ask_intent",
-        event_state: "awaiting_intent",
-        payload: {
-          phone_number,
-          message:
-            "This issue could be:\n1️⃣ Your unit\n2️⃣ Common area\n3️⃣ Both\nReply 1, 2 or 3"
-        }
-      });
-
-      return res.status(202).json({
-        pending: true,
-        message: "Awaiting user intent confirmation"
-      });
-    }
-
-    /* ===== 4️⃣ INSERT TICKET ===== */
+    /* ===== 3️⃣ CREATE TICKET (ALWAYS) ===== */
     const { data: ticket, error: insertError } = await supabase
       .from("tickets")
       .insert({
@@ -164,7 +146,7 @@ export default async function handler(
         description_raw,
         description_clean: description_raw,
         source: "whatsapp",
-        status: "new",
+        status: intent_category === "uncertain" ? "pending_intent" : "new",
         is_common_area: intent_category === "common_area",
         intent_category,
         intent_source,
@@ -176,6 +158,25 @@ export default async function handler(
 
     if (insertError || !ticket) {
       throw insertError;
+    }
+
+    /* ===== 4️⃣ ASK INTENT IF UNCERTAIN ===== */
+    if (intent_category === "uncertain") {
+      await supabase.from("ticket_events").insert({
+        ticket_id: ticket.id,
+        event_type: "ask_intent",
+        event_state: "awaiting_intent",
+        payload: {
+          phone_number,
+          message:
+            "This issue could be:\n1️⃣ Your unit\n2️⃣ Common area\n3️⃣ Both\nReply 1, 2 or 3"
+        }
+      });
+
+      return res.status(202).json({
+        pending: true,
+        ticket_id: ticket.id
+      });
     }
 
     /* ===== 5️⃣ EMBEDDING + DUPLICATE LOGIC ===== */
@@ -206,21 +207,20 @@ export default async function handler(
       if (matches?.length) {
         const best = matches[0];
 
-        // 🔴 Hard duplicate: common area
-        if (ticket.is_common_area && best.is_common_area) {
-          duplicate_of = best.id;
-        }
-        // 🔴 Hard duplicate: same unit
-        else if (
-          !ticket.is_common_area &&
-          !best.is_common_area &&
-          ticket.unit_id &&
-          best.unit_id &&
-          ticket.unit_id === best.unit_id
+        // 🔴 HARD DUPLICATE
+        if (
+          (ticket.is_common_area && best.is_common_area) ||
+          (
+            !ticket.is_common_area &&
+            !best.is_common_area &&
+            ticket.unit_id &&
+            best.unit_id &&
+            ticket.unit_id === best.unit_id
+          )
         ) {
           duplicate_of = best.id;
         }
-        // 🟡 Related: different units
+        // 🟡 RELATED
         else {
           related_to = best.id;
         }
@@ -238,6 +238,7 @@ export default async function handler(
 
     /* ===== 6️⃣ ASK FOR PHOTO ===== */
     await supabase.from("ticket_events").insert({
+      ticket_id: ticket.id,
       event_type: "ask_photo",
       event_state: "awaiting_photo",
       payload: {
