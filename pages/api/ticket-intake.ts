@@ -179,62 +179,57 @@ export default async function handler(
       });
     }
 
-    /* ===== 5️⃣ EMBEDDING + DUPLICATE LOGIC ===== */
-    let duplicate_of: string | null = null;
-    let related_to: string | null = null;
+/* ===== 5️⃣ EMBEDDING + DUPLICATE LOGIC (FIXED — NO MATCH COUNT) ===== */
+let duplicate_of: string | null = null;
+let related_to: string | null = null;
 
-    if (openai) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_raw
-      });
+if (openai) {
+  const emb = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: description_raw
+  });
 
-      const embedding = emb.data[0].embedding;
+  const embedding = emb.data[0].embedding;
 
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
+  await supabase
+    .from("tickets")
+    .update({ embedding })
+    .eq("id", ticket.id);
 
-      const { data: matches } = await supabase.rpc("match_tickets", {
-        query_embedding: embedding,
-        condo_filter: condo_id,
-        exclude_id: ticket.id,
-        match_threshold: 0.85,
-        match_count: 1
-      });
+  const { data: relation, error: relationError } =
+    await supabase.rpc("detect_ticket_relation", {
+      query_embedding: embedding,
+      condo_filter: condo_id,
+      ticket_unit_id: ticket.unit_id,
+      ticket_is_common_area: ticket.is_common_area,
+      exclude_id: ticket.id,
+      similarity_threshold: 0.85
+    });
 
-      if (matches?.length) {
-        const best = matches[0];
+  if (relationError) {
+    throw relationError;
+  }
 
-        // 🔴 HARD DUPLICATE
-        if (
-          (ticket.is_common_area && best.is_common_area) ||
-          (
-            !ticket.is_common_area &&
-            !best.is_common_area &&
-            ticket.unit_id &&
-            best.unit_id &&
-            ticket.unit_id === best.unit_id
-          )
-        ) {
-          duplicate_of = best.id;
-        }
-        // 🟡 RELATED
-        else {
-          related_to = best.id;
-        }
+  if (relation && relation.length > 0) {
+    const r = relation[0];
 
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
-      }
+    if (r.relation_type === "hard_duplicate") {
+      duplicate_of = r.related_ticket_id;
+    } else if (r.relation_type === "related") {
+      related_to = r.related_ticket_id;
     }
+
+    await supabase
+      .from("tickets")
+      .update({
+        is_duplicate: !!duplicate_of,
+        duplicate_of,
+        related_to
+      })
+      .eq("id", ticket.id);
+  }
+}
+
 
     /* ===== 6️⃣ ASK FOR PHOTO ===== */
     await supabase.from("ticket_events").insert({
