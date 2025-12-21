@@ -1,79 +1,92 @@
-/* ===== 3️⃣ CREATE TICKET (ALWAYS) ===== */
-const { data: ticket, error: insertError } = await supabase
-  .from("tickets")
-  .insert({
-    condo_id,
-    unit_id: intent_category === "unit" ? unit_id : null,
-    description_raw,
-    description_clean: description_raw,
-    source: "whatsapp",
-    status: "new", // 🔧 FIX 1: enum-safe
-    is_common_area: intent_category === "common_area",
-    intent_category,
-    intent_source,
-    intent_confidence,
-    diagnosis_fee: intent_category === "unit" ? 30 : 0
-  })
-  .select()
-  .single();
+import type { NextApiRequest, NextApiResponse } from "next";
+import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
 
-if (insertError || !ticket) {
-  throw insertError;
-}
+/* ================= CLIENTS ================= */
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
-/* ===== 5️⃣ EMBEDDING + DUPLICATE LOGIC ===== */
-let duplicate_of: string | null = null;
-let related_to: string | null = null;
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
-if (openai) {
-  const emb = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: description_raw
-  });
-
-  const embedding = emb.data[0].embedding;
-
-  // 🔧 FIX 2: verify embedding update
-  const { error: embedUpdateError } = await supabase
-    .from("tickets")
-    .update({ embedding })
-    .eq("id", ticket.id);
-
-  if (embedUpdateError) {
-    throw embedUpdateError;
+/* ================= API HANDLER ================= */
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  if (req.method !== "POST") {
+    return res.status(200).json({ ok: true });
   }
 
-  // 🔧 FIX 3: null-safe RPC inputs
-  const { data: relation, error: relationError } =
-    await supabase.rpc("detect_ticket_relation", {
-      query_embedding: embedding,
-      condo_filter: condo_id,
-      ticket_unit_id: ticket.unit_id ?? null,
-      ticket_is_common_area: !!ticket.is_common_area,
-      exclude_id: ticket.id,
-      similarity_threshold: 0.85
-    });
+  try {
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-  if (relationError) {
-    throw relationError;
-  }
+    const { condo_id, phone_number, description_raw } = body;
 
-  if (relation && relation.length > 0) {
-    const r = relation[0];
-
-    if (r.relation_type === "hard_duplicate") {
-      duplicate_of = r.related_ticket_id;
-    } else if (r.relation_type === "related") {
-      related_to = r.related_ticket_id;
+    if (!condo_id || !phone_number || !description_raw) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    await supabase
+    /* ===== VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
+
+    /* ===== CREATE TICKET ===== */
+    const { data: ticket, error: insertError } = await supabase
       .from("tickets")
-      .update({
-        is_duplicate: !!duplicate_of,
-        duplicate_of,
-        related_to
+      .insert({
+        condo_id,
+        unit_id: resident.unit_id,
+        description_raw,
+        description_clean: description_raw,
+        source: "whatsapp",
+        status: "new", // ✅ enum-safe
+        is_common_area: false
       })
-      .eq("id", ticket.id);
+      .select()
+      .single();
+
+    if (insertError || !ticket) {
+      throw insertError;
+    }
+
+    /* ===== CREATE EMBEDDING ===== */
+    if (openai) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description_raw
+      });
+
+      await supabase
+        .from("tickets")
+        .update({ embedding: emb.data[0].embedding })
+        .eq("id", ticket.id);
+    }
+
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id
+    });
+
+  } catch (err: any) {
+    console.error("🔥 ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
   }
 }
