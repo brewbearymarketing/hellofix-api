@@ -14,6 +14,8 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
+
+
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -49,6 +51,9 @@ async function aiClassify(text: string): Promise<{
 }> {
   if (!openai) return { category: "uncertain", confidence: 0 };
 
+  console.log("AI CHECK TRIGGERED");
+  console.log("AI INPUT:", text);
+
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -65,6 +70,9 @@ async function aiClassify(text: string): Promise<{
     });
 
     const parsed = r.choices[0]?.message?.content;
+
+ console.log("AI RAW RESPONSE:", raw);
+    
     const obj = typeof parsed === "string" ? JSON.parse(parsed) : {};
 
     return {
