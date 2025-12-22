@@ -49,7 +49,10 @@ async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
 }> {
-  if (!openai) return { category: "uncertain", confidence: 0 };
+  if (!openai) {
+    console.log("AI SKIPPED: OpenAI disabled");
+    return { category: "uncertain", confidence: 0 };
+  }
 
   console.log("AI CHECK TRIGGERED");
   console.log("AI INPUT:", text);
@@ -62,24 +65,24 @@ async function aiClassify(text: string): Promise<{
         {
           role: "system",
           content:
-            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON."
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
         },
         { role: "user", content: text }
       ],
       response_format: { type: "json_object" }
     });
 
-    const parsed = r.choices[0]?.message?.content;
+    const raw = r.choices[0]?.message?.content;
+    console.log("AI RAW RESPONSE:", raw);
 
- console.log("AI RAW RESPONSE:", raw);
-    
-    const obj = typeof parsed === "string" ? JSON.parse(parsed) : {};
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
 
     return {
       category: obj.category ?? "uncertain",
       confidence: Number(obj.confidence ?? 0)
     };
-  } catch {
+  } catch (err) {
+    console.error("AI ERROR:", err);
     return { category: "uncertain", confidence: 0 };
   }
 }
