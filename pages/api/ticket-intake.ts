@@ -14,8 +14,6 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
-
-
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -33,7 +31,6 @@ const OWN_UNIT_KEYWORDS = [
   "அறை","சமையலறை"
 ];
 
-// ⚠️ Ambiguous — NEVER auto decide
 const AMBIGUOUS_KEYWORDS = [
   "toilet","tandas","aircond","air conditioner","ac",
   "厕所","空调","கழிப்பிடம்"
@@ -49,13 +46,7 @@ async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
 }> {
-  if (!openai) {
-    console.log("AI SKIPPED: OpenAI disabled");
-    return { category: "uncertain", confidence: 0 };
-  }
-
-  console.log("AI CHECK TRIGGERED");
-  console.log("AI INPUT:", text);
+  if (!openai) return { category: "uncertain", confidence: 0 };
 
   try {
     const r = await openai.chat.completions.create({
@@ -73,18 +64,76 @@ async function aiClassify(text: string): Promise<{
     });
 
     const raw = r.choices[0]?.message?.content;
-    console.log("AI RAW RESPONSE:", raw);
-
     const obj = typeof raw === "string" ? JSON.parse(raw) : {};
 
     return {
       category: obj.category ?? "uncertain",
       confidence: Number(obj.confidence ?? 0)
     };
-  } catch (err) {
-    console.error("AI ERROR:", err);
+  } catch {
     return { category: "uncertain", confidence: 0 };
   }
+}
+
+/* ================= 🔹 ADDED: TRANSCRIPT CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+
+  let t = text.toLowerCase();
+
+  // remove filler words (multilingual)
+  t = t.replace(
+    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
+    ""
+  );
+
+  // remove repeated words (e.g. "bocor bocor bocor")
+  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
+
+  // normalize spaces
+  t = t.replace(/\s+/g, " ").trim();
+
+  // capitalize first letter
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= 🔹 ADDED: VOICE TRANSCRIPTION ================= */
+async function transcribeVoice(url: string): Promise<string | null> {
+  if (!openai) return null;
+
+  try {
+    const audio = await fetch(url).then(r => r.arrayBuffer());
+    const file = new File([audio], "voice.ogg", { type: "audio/ogg" });
+
+    const transcript = await openai.audio.transcriptions.create({
+      file,
+      model: "gpt-4o-mini-transcribe"
+    });
+
+    return transcript.text || null;
+  } catch (err) {
+    console.error("VOICE TRANSCRIPTION FAILED:", err);
+    return null;
+  }
+}
+
+/* ================= 🔹 ADDED: MESSAGE NORMALIZER ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text = body.description_raw ?? "";
+
+  // voice first
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  // photo-only fallback
+  if (!text && body.image_url) {
+    text = "Photo evidence provided. Issue description pending.";
+  }
+
+  // 🔹 CLEAN TRANSCRIPT BEFORE ANY AI / EMBEDDING
+  return cleanTranscript(text);
 }
 
 /* ================= API HANDLER ================= */
@@ -100,7 +149,9 @@ export default async function handler(
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { condo_id, phone_number, description_raw } = body;
+    const { condo_id, phone_number } = body;
+
+    const description_raw = await normalizeIncomingMessage(body);
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -132,28 +183,25 @@ export default async function handler(
     const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
 
     if (commonHit && unitHit) {
-  intent_category = "mixed";
-  intent_source = "keyword";
-}
-else if (commonHit && !ambiguousHit) {
-  intent_category = "common_area";
-  intent_source = "keyword";
-}
-else if (unitHit && !ambiguousHit) {
-  intent_category = "unit";
-  intent_source = "keyword";
-}
-else {
-  const ai = await aiClassify(description_raw);
-  if (ai.confidence >= 0.7) {
-    intent_category = ai.category;
-    intent_confidence = ai.confidence;
-    intent_source = "ai";
-  }
-}
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
 
-    /* ===== 3️⃣ CREATE TICKET (ALWAYS) ===== */
-    const { data: ticket, error: insertError } = await supabase
+    /* ===== 3️⃣ CREATE TICKET ===== */
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         condo_id,
@@ -171,11 +219,9 @@ else {
       .select()
       .single();
 
-    if (insertError || !ticket) {
-      throw insertError;
-    }
+    if (error || !ticket) throw error;
 
-    /* ===== 4️⃣ EMBEDDING + DUPLICATE (SUPABASE DECIDES) ===== */
+    /* ===== 4️⃣ EMBEDDING + DUPLICATE ===== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
@@ -187,14 +233,9 @@ else {
 
       const embedding = emb.data[0].embedding;
 
-      // store embedding
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
+      await supabase.from("tickets").update({ embedding }).eq("id", ticket.id);
 
-      // let Supabase decide relation
-      const { data: relation, error } = await supabase.rpc(
+      const { data: relation } = await supabase.rpc(
         "detect_ticket_relation",
         {
           query_embedding: embedding,
@@ -206,38 +247,18 @@ else {
         }
       );
 
-      if (error) throw error;
-
-      if (relation && relation.length > 0) {
+      if (relation?.length) {
         const r = relation[0];
+        if (r.relation_type === "hard_duplicate") duplicate_of = r.related_ticket_id;
+        if (r.relation_type === "related") related_to = r.related_ticket_id;
 
-        if (r.relation_type === "hard_duplicate") {
-          duplicate_of = r.related_ticket_id;
-        } else if (r.relation_type === "related") {
-          related_to = r.related_ticket_id;
-        }
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
+        await supabase.from("tickets").update({
+          is_duplicate: !!duplicate_of,
+          duplicate_of,
+          related_to
+        }).eq("id", ticket.id);
       }
     }
-
-    /* ===== 5️⃣ ASK FOR PHOTO ===== */
-    await supabase.from("ticket_events").insert({
-      ticket_id: ticket.id,
-      event_type: "ask_photo",
-      event_state: "awaiting_photo",
-      payload: {
-        phone_number,
-        message: "Do you have photo evidence? Reply YES or NO."
-      }
-    });
 
     return res.status(200).json({
       success: true,
