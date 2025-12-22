@@ -12,6 +12,8 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+console.log("OPENAI ENABLED:", !!openai);
+
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
