@@ -111,7 +111,7 @@ export default async function handler(
 
     /* ===== 2️⃣ INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-    let intent_source = "keyword";
+    let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
 
     const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
@@ -119,19 +119,25 @@ export default async function handler(
     const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
 
     if (commonHit && unitHit) {
-      intent_category = "mixed";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
+  intent_category = "mixed";
+  intent_source = "keyword";
+}
+else if (commonHit && !ambiguousHit) {
+  intent_category = "common_area";
+  intent_source = "keyword";
+}
+else if (unitHit && !ambiguousHit) {
+  intent_category = "unit";
+  intent_source = "keyword";
+}
+else {
+  const ai = await aiClassify(description_raw);
+  if (ai.confidence >= 0.7) {
+    intent_category = ai.category;
+    intent_confidence = ai.confidence;
+    intent_source = "ai";
+  }
+}
 
     /* ===== 3️⃣ CREATE TICKET (ALWAYS) ===== */
     const { data: ticket, error: insertError } = await supabase
