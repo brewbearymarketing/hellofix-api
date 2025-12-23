@@ -184,7 +184,6 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
   }
-}
 
     /* ===== 1️⃣ VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
