@@ -99,6 +99,8 @@ function cleanTranscript(text: string): string {
 
 /* ================= 🔹 ADDED: VOICE TRANSCRIPTION ================= */
 
+import { toFile } from "openai/uploads";
+
 async function transcribeVoice(url: string): Promise<string | null> {
   if (!openai) return null;
 
@@ -120,13 +122,15 @@ async function transcribeVoice(url: string): Promise<string | null> {
 
     const audioBuffer = await audioRes.arrayBuffer();
 
-    const file = new File([audioBuffer], "voice.ogg", {
-      type: "audio/ogg"
-    });
+    const file = await toFile(
+      Buffer.from(audioBuffer),
+      "voice.ogg",
+      { type: "audio/ogg" }
+    );
 
     const transcript = await openai.audio.transcriptions.create({
       file,
-      model: "gpt-4o-mini-transcribe"
+      model: "whisper-1"
     });
 
     return transcript.text || null;
@@ -136,6 +140,7 @@ async function transcribeVoice(url: string): Promise<string | null> {
     return null;
   }
 }
+
 
 
 /* ================= 🔹 ADDED: MESSAGE NORMALIZER ================= */
