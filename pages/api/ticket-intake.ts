@@ -170,7 +170,9 @@ export default async function handler(
   console.log("🔥 HIT API");
   console.log("🔥 RAW BODY:", req.body);
 
-  return res.status(200).json({ ok: true });
+  if (req.method !== "POST") {
+    return res.status(200).json({ ok: true });
+  }
 
   try {
     const body =
@@ -183,7 +185,24 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+    // ✅ If we reach here, everything is OK
+    return res.status(200).json({
+      ok: true,
+      condo_id,
+      phone_number,
+      description_raw
+    });
+
+  } catch (err: any) {
+    console.error("🔥 HANDLER ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
   }
+}
+
 
     /* ===== 1️⃣ VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
