@@ -1,8 +1,7 @@
-with voice:
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
+import { toFile } from "openai/uploads";
 
 /* ================= CLIENTS ================= */
 const supabase = createClient(
@@ -77,33 +76,25 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
-/* ================= 🔹 ADDED: TRANSCRIPT CLEANER ================= */
+/* ================= TRANSCRIPT CLEANER ================= */
 function cleanTranscript(text: string): string {
   if (!text) return text;
 
   let t = text.toLowerCase();
 
-  // remove filler words (multilingual)
   t = t.replace(
     /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
     ""
   );
 
-  // remove repeated words (e.g. "bocor bocor bocor")
   t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-
-  // normalize spaces
   t = t.replace(/\s+/g, " ").trim();
 
-  // capitalize first letter
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-/* ================= 🔹 ADDED: VOICE TRANSCRIPTION ================= */
-
-import { toFile } from "openai/uploads";
-
-async function transcribeVoice(url: string): Promise<string | null> {
+/* ================= VOICE TRANSCRIPTION ================= */
+async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   if (!openai) return null;
 
   try {
@@ -111,23 +102,21 @@ async function transcribeVoice(url: string): Promise<string | null> {
       `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
     ).toString("base64");
 
-    const audioRes = await fetch(url, {
-      headers: {
-        Authorization: `Basic ${auth}`
-      }
+    const mediaRes = await fetch(mediaUrl, {
+      headers: { Authorization: `Basic ${auth}` }
     });
 
-    if (!audioRes.ok) {
-      console.error("TWILIO FETCH FAILED:", audioRes.status);
+    if (!mediaRes.ok) {
+      console.error("TWILIO MEDIA FETCH FAILED:", mediaRes.status);
       return null;
     }
 
-    const audioBuffer = await audioRes.arrayBuffer();
+    const arrayBuffer = await mediaRes.arrayBuffer();
 
     const file = await toFile(
-      Buffer.from(audioBuffer),
-      "voice.ogg",
-      { type: "audio/ogg" }
+      Buffer.from(arrayBuffer),
+      "voice",
+      { type: mediaRes.headers.get("content-type") || "application/octet-stream" }
     );
 
     const transcript = await openai.audio.transcriptions.create({
@@ -135,50 +124,49 @@ async function transcribeVoice(url: string): Promise<string | null> {
       model: "whisper-1"
     });
 
-    return transcript.text || null;
-
+    return transcript.text ?? null;
   } catch (err) {
     console.error("VOICE TRANSCRIPTION ERROR:", err);
     return null;
   }
 }
 
-
-
-/* ================= 🔹 ADDED: MESSAGE NORMALIZER ================= */
+/* ================= MESSAGE NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
-  let text = body.description_raw ?? "";
+  let text: string = body.description_raw || "";
 
-  // voice first
+  // Voice has priority if no text
   if (!text && body.voice_url) {
     const transcript = await transcribeVoice(body.voice_url);
     if (transcript) text = transcript;
   }
 
-  // photo-only fallback
+  // Image-only fallback
   if (!text && body.image_url) {
     text = "Photo evidence provided. Issue description pending.";
   }
 
-  // 🔹 CLEAN TRANSCRIPT BEFORE ANY AI / EMBEDDING
   return cleanTranscript(text);
 }
 
 /* ================= API HANDLER ================= */
-export default async function handler( 
-  req: NextApiRequest, 
-  res: NextApiResponse 
-) { 
-  if (req.method !== "POST") { 
-    return res.status(200).json({ ok: true }); 
-  } 
-  try { 
-    const body = 
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body; 
-    const { condo_id, phone_number } = body; 
-    const description_raw = await normalizeIncomingMessage(body); 
-    if (!condo_id || !phone_number || !description_raw)  {
-      return res.status(400).json({ error: "Missing required fields" }); 
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  if (req.method !== "POST") {
+    return res.status(200).json({ ok: true });
+  }
+
+  try {
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+
+    const { condo_id, phone_number } = body;
+    const description_raw = await normalizeIncomingMessage(body);
+
+    if (!condo_id || !phone_number || !description_raw) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
     /* ===== 1️⃣ VERIFY RESIDENT ===== */
@@ -257,7 +245,10 @@ export default async function handler(
 
       const embedding = emb.data[0].embedding;
 
-      await supabase.from("tickets").update({ embedding }).eq("id", ticket.id);
+      await supabase
+        .from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
 
       const { data: relation } = await supabase.rpc(
         "detect_ticket_relation",
@@ -276,11 +267,14 @@ export default async function handler(
         if (r.relation_type === "hard_duplicate") duplicate_of = r.related_ticket_id;
         if (r.relation_type === "related") related_to = r.related_ticket_id;
 
-        await supabase.from("tickets").update({
-          is_duplicate: !!duplicate_of,
-          duplicate_of,
-          related_to
-        }).eq("id", ticket.id);
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: !!duplicate_of,
+            duplicate_of,
+            related_to
+          })
+          .eq("id", ticket.id);
       }
     }
 
