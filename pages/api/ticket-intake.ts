@@ -143,18 +143,18 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
       `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
     ).toString("base64");
 
-    const mediaRes = await fetch(mediaUrl, {
+    const res = await fetch(mediaUrl, {
       headers: { Authorization: `Basic ${auth}` }
     });
 
-    if (!mediaRes.ok) return null;
+    if (!res.ok) return null;
 
-    const buffer = await mediaRes.arrayBuffer();
+    const buffer = await res.arrayBuffer();
 
     const file = await toFile(
       Buffer.from(buffer),
       "voice",
-      { type: mediaRes.headers.get("content-type") || "application/octet-stream" }
+      { type: res.headers.get("content-type") || "application/octet-stream" }
     );
 
     const transcript = await openai.audio.transcriptions.create({
@@ -269,6 +269,52 @@ export default async function handler(
       .single();
 
     if (error || !ticket) throw error;
+
+    /* ===== EMBEDDING + DUPLICATE (RESTORED) ===== */
+    if (openai && description_clean) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description_clean
+      });
+
+      const embedding = emb.data[0].embedding;
+
+      await supabase
+        .from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
+
+      const { data: relation } = await supabase.rpc(
+        "detect_ticket_relation",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          ticket_unit_id: ticket.unit_id,
+          ticket_is_common_area: ticket.is_common_area,
+          exclude_id: ticket.id,
+          similarity_threshold: 0.85
+        }
+      );
+
+      if (relation?.length) {
+        const r = relation[0];
+
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: r.relation_type === "hard_duplicate",
+            duplicate_of:
+              r.relation_type === "hard_duplicate"
+                ? r.related_ticket_id
+                : null,
+            related_to:
+              r.relation_type === "related"
+                ? r.related_ticket_id
+                : null
+          })
+          .eq("id", ticket.id);
+      }
+    }
 
     return res.status(200).json({
       success: true,
