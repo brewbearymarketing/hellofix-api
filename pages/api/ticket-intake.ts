@@ -98,12 +98,31 @@ function cleanTranscript(text: string): string {
 }
 
 /* ================= 🔹 ADDED: VOICE TRANSCRIPTION ================= */
+
 async function transcribeVoice(url: string): Promise<string | null> {
   if (!openai) return null;
 
   try {
-    const audio = await fetch(url).then(r => r.arrayBuffer());
-    const file = new File([audio], "voice.ogg", { type: "audio/ogg" });
+    const auth = Buffer.from(
+      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+    ).toString("base64");
+
+    const audioRes = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${auth}`
+      }
+    });
+
+    if (!audioRes.ok) {
+      console.error("TWILIO FETCH FAILED:", audioRes.status);
+      return null;
+    }
+
+    const audioBuffer = await audioRes.arrayBuffer();
+
+    const file = new File([audioBuffer], "voice.ogg", {
+      type: "audio/ogg"
+    });
 
     const transcript = await openai.audio.transcriptions.create({
       file,
@@ -111,11 +130,13 @@ async function transcribeVoice(url: string): Promise<string | null> {
     });
 
     return transcript.text || null;
+
   } catch (err) {
-    console.error("VOICE TRANSCRIPTION FAILED:", err);
+    console.error("VOICE TRANSCRIPTION ERROR:", err);
     return null;
   }
 }
+
 
 /* ================= 🔹 ADDED: MESSAGE NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
