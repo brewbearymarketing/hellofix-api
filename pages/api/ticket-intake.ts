@@ -13,7 +13,7 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-/* ================= GREETING GUARD (NEW) ================= */
+/* ================= GREETING GUARD ================= */
 function isGreetingOnly(text: string): boolean {
   if (!text) return true;
   const t = text.toLowerCase().trim();
@@ -23,8 +23,21 @@ function isGreetingOnly(text: string): boolean {
   );
 }
 
+/* ================= NEW ISSUE GUARD (2️⃣) ================= */
+function isNewIssueIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  return [
+    "new issue",
+    "another issue",
+    "different issue",
+    "also got problem",
+    "report another",
+    "nak report lain",
+    "isu lain"
+  ].some(k => t.includes(k));
+}
+
 /* ================= KEYWORDS ================= */
-/* ❗ UNCHANGED — YOUR ORIGINAL CODE */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
   "garbage","trash","bin room","pool","gym",
@@ -54,7 +67,6 @@ function keywordMatch(text: string, keywords: string[]) {
 }
 
 /* ================= AI CLASSIFIER ================= */
-/* ❗ UNCHANGED */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
@@ -89,7 +101,6 @@ async function aiClassify(text: string): Promise<{
 }
 
 /* ================= MALAYSIAN AI NORMALISER ================= */
-/* ❗ UNCHANGED */
 async function aiCleanDescription(text: string): Promise<string> {
   if (!openai) return text;
 
@@ -198,7 +209,7 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ================= SESSION LOAD / CREATE (NEW) ================= */
+    /* ================= SESSION LOAD / CREATE ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -219,26 +230,58 @@ export default async function handler(
       session = newSession;
     }
 
+    /* ================= AUTO-CLOSE SESSION IF TICKET MOVED (1️⃣) ================= */
+    if (session.current_ticket_id) {
+      const { data: t } = await supabase
+        .from("tickets")
+        .select("status")
+        .eq("id", session.current_ticket_id)
+        .maybeSingle();
+
+      if (t && ["assigned","in_progress","awaiting_payment"].includes(t.status)) {
+        await supabase
+          .from("conversation_sessions")
+          .update({
+            state: "closed",
+            current_ticket_id: null
+          })
+          .eq("id", session.id);
+      }
+    }
+
     /* ================= STOP GREETING ================= */
     if (isGreetingOnly(description_raw)) {
-      await supabase
-        .from("conversation_sessions")
-        .update({
-          state: "collecting",
-          last_message: description_raw,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", session.id);
-
       return res.status(200).json({
         reply: "Hi 👋 Please describe the issue you are facing."
       });
     }
 
-    /* ================= PREVENT DUPLICATE TICKET IN SESSION ================= */
-    if (session.current_ticket_id) {
+    /* ================= FORCE NEW ISSUE (2️⃣) ================= */
+    if (session.state === "ticket_created" && isNewIssueIntent(description_raw)) {
+      await supabase
+        .from("conversation_sessions")
+        .update({
+          state: "idle",
+          current_ticket_id: null
+        })
+        .eq("id", session.id);
+    }
+
+    /* ================= MULTI-ISSUE DETECTION (3️⃣) ================= */
+    const hasMultipleIssues =
+      intent_category === "mixed" ||
+      description_clean.includes(" and ") ||
+      description_clean.includes(",");
+
+    if (hasMultipleIssues && session.state !== "confirming_split") {
+      await supabase
+        .from("conversation_sessions")
+        .update({ state: "confirming_split" })
+        .eq("id", session.id);
+
       return res.status(200).json({
-        reply: "We’ve added this to your existing complaint."
+        reply:
+          "I detected multiple issues. Reply:\n1️⃣ Same unit & same contractor\n2️⃣ Separate issues"
       });
     }
 
