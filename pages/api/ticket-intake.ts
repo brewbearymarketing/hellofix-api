@@ -171,8 +171,6 @@ export default async function handler(
   console.log("🔥 RAW BODY:", req.body);
 
   return res.status(200).json({ ok: true });
-}
-
 
   try {
     const body =
@@ -185,6 +183,8 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+  }
+}
 
     /* ===== 1️⃣ VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
