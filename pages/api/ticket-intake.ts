@@ -29,7 +29,7 @@ const OWN_UNIT_KEYWORDS = [
   "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
   "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
 "lampu rumah","lampu bilik",
-  "房间","厨房","房屋厕所","房间厕所”,“主厕所”,“房屋浴室”,“屋灯”,“房间灯”,
+  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
   "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
 ];
 
