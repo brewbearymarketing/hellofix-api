@@ -42,7 +42,7 @@ function keywordMatch(text: string, keywords: string[]) {
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
-/* ================= AI FALLBACK ================= */
+/* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
@@ -76,6 +76,47 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
+/* ================= MALAYSIAN AI NORMALISER ================= */
+async function aiCleanDescription(text: string): Promise<string> {
+  if (!openai) return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a Malaysian property maintenance assistant.
+
+Rewrite the issue into ONE short, clear maintenance sentence in English.
+
+Rules:
+- Remove filler words (lah, lor, leh, ah, eh).
+- Translate Malaysian slang / rojak into standard English.
+- Translate Malay / Chinese / Tamil words if present.
+- Keep ONLY the asset + problem + location if mentioned.
+- No emojis. No apologies. No extra words.
+- Do NOT guess causes. Do NOT add solutions.
+
+Examples:
+"aircond rosak tak sejuk bilik master" → "Master bedroom air conditioner not cooling"
+"paip bocor bawah sink dapur" → "Kitchen sink pipe leaking"
+"lift rosak tingkat 5" → "Elevator malfunction at level 5"
+"lampu koridor level 3 tak nyala" → "Corridor light not working at level 3"
+`
+        },
+        { role: "user", content: text }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
+}
+
 /* ================= TRANSCRIPT CLEANER ================= */
 function cleanTranscript(text: string): string {
   if (!text) return text;
@@ -106,15 +147,12 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
       headers: { Authorization: `Basic ${auth}` }
     });
 
-    if (!mediaRes.ok) {
-      console.error("TWILIO MEDIA FETCH FAILED:", mediaRes.status);
-      return null;
-    }
+    if (!mediaRes.ok) return null;
 
-    const arrayBuffer = await mediaRes.arrayBuffer();
+    const buffer = await mediaRes.arrayBuffer();
 
     const file = await toFile(
-      Buffer.from(arrayBuffer),
+      Buffer.from(buffer),
       "voice",
       { type: mediaRes.headers.get("content-type") || "application/octet-stream" }
     );
@@ -125,8 +163,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
     });
 
     return transcript.text ?? null;
-  } catch (err) {
-    console.error("VOICE TRANSCRIPTION ERROR:", err);
+  } catch {
     return null;
   }
 }
@@ -135,13 +172,11 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
 
-  // Voice has priority if no text
   if (!text && body.voice_url) {
     const transcript = await transcribeVoice(body.voice_url);
     if (transcript) text = transcript;
   }
 
-  // Image-only fallback
   if (!text && body.image_url) {
     text = "Photo evidence provided. Issue description pending.";
   }
@@ -163,13 +198,15 @@ export default async function handler(
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
+
     const description_raw = await normalizeIncomingMessage(body);
+    const description_clean = await aiCleanDescription(description_raw);
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ===== 1️⃣ VERIFY RESIDENT ===== */
+    /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -185,7 +222,7 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-    /* ===== 2️⃣ INTENT DETECTION ===== */
+    /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
@@ -212,14 +249,14 @@ export default async function handler(
       }
     }
 
-    /* ===== 3️⃣ CREATE TICKET ===== */
+    /* ===== CREATE TICKET ===== */
     const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         condo_id,
         unit_id: intent_category === "unit" ? unit_id : null,
         description_raw,
-        description_clean: description_raw,
+        description_clean,
         source: "whatsapp",
         status: "new",
         is_common_area: intent_category === "common_area",
@@ -233,57 +270,10 @@ export default async function handler(
 
     if (error || !ticket) throw error;
 
-    /* ===== 4️⃣ EMBEDDING + DUPLICATE ===== */
-    let duplicate_of: string | null = null;
-    let related_to: string | null = null;
-
-    if (openai) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_raw
-      });
-
-      const embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: ticket.unit_id,
-          ticket_is_common_area: ticket.is_common_area,
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
-
-      if (relation?.length) {
-        const r = relation[0];
-        if (r.relation_type === "hard_duplicate") duplicate_of = r.related_ticket_id;
-        if (r.relation_type === "related") related_to = r.related_ticket_id;
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
-      }
-    }
-
     return res.status(200).json({
       success: true,
       ticket_id: ticket.id,
-      intent_category,
-      duplicate_of,
-      related_to
+      intent_category
     });
 
   } catch (err: any) {
