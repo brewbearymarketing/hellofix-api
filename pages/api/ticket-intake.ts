@@ -34,7 +34,7 @@ const OWN_UNIT_KEYWORDS = [
 ];
 
 const AMBIGUOUS_KEYWORDS = [
-  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu"
+  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
   "厕所","空调","கழிப்பிடம்","चिराग","灯"
 ];
 
