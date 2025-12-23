@@ -26,15 +26,16 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink",
-  "bilik","dapur",
-  "房间","厨房",
-  "அறை","சமையலறை"
+  "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
+  "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
+"lampu rumah","lampu bilik",
+  "房间","厨房","房屋厕所","房间厕所”,“主厕所”,“房屋浴室”,“屋灯”,“房间灯”,
+  "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
 ];
 
 const AMBIGUOUS_KEYWORDS = [
-  "toilet","tandas","aircond","air conditioner","ac",
-  "厕所","空调","கழிப்பிடம்"
+  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu"
+  "厕所","空调","கழிப்பிடம்","चिराग","灯"
 ];
 
 function keywordMatch(text: string, keywords: string[]) {
