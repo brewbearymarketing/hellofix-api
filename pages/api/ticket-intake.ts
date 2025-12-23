@@ -163,43 +163,21 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 }
 
 /* ================= API HANDLER ================= */
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  if (req.method !== "POST") {
-    return res.status(200).json({ ok: true });
-  }
-
-  try {
-    console.log("🔥 HIT API");
-    console.log("🔥 RAW BODY:", req.body);
-
-    const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-
-    const { condo_id, phone_number } = body;
-
-    const description_raw = await normalizeIncomingMessage(body);
-
-    console.log("🔥 NORMALIZED DESCRIPTION:", description_raw);
-
-    return res.status(200).json({
-      ok: true,
-      condo_id,
-      phone_number,
-      description_raw
-    });
-
-  } catch (err: any) {
-    console.error("🔥 DEBUG ERROR:", err);
-    return res.status(500).json({
-      error: "Debug failed",
-      detail: err.message
-    });
-  }
-}
-
+export default async function handler( 
+  req: NextApiRequest, 
+  res: NextApiResponse 
+) { 
+  if (req.method !== "POST") { 
+    return res.status(200).json({ ok: true }); 
+  } 
+  try { 
+    const body = 
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body; 
+    const { condo_id, phone_number } = body; 
+    const description_raw = await normalizeIncomingMessage(body); 
+    if (!condo_id || !phone_number || !description_raw)  {
+      return res.status(400).json({ error: "Missing required fields" }); 
+    }
 
     /* ===== 1️⃣ VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
