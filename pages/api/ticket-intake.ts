@@ -167,14 +167,14 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  console.log("🔥 HIT API");
-  console.log("🔥 RAW BODY:", req.body);
-
   if (req.method !== "POST") {
     return res.status(200).json({ ok: true });
   }
 
   try {
+    console.log("🔥 HIT API");
+    console.log("🔥 RAW BODY:", req.body);
+
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
@@ -182,11 +182,8 @@ export default async function handler(
 
     const description_raw = await normalizeIncomingMessage(body);
 
-    if (!condo_id || !phone_number || !description_raw) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+    console.log("🔥 NORMALIZED DESCRIPTION:", description_raw);
 
-    // ✅ If we reach here, everything is OK
     return res.status(200).json({
       ok: true,
       condo_id,
@@ -195,9 +192,9 @@ export default async function handler(
     });
 
   } catch (err: any) {
-    console.error("🔥 HANDLER ERROR:", err);
+    console.error("🔥 DEBUG ERROR:", err);
     return res.status(500).json({
-      error: "Internal Server Error",
+      error: "Debug failed",
       detail: err.message
     });
   }
