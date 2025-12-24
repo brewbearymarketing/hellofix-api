@@ -68,7 +68,7 @@ const AUTO_REPLIES = {
   ticketCreated: {
     en: "✅ Your issue has been reported. We will assign a contractor shortly.",
     ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
-    zh: "✅ 您的问题已记录。",
+    zh: "✅ 您的问题已记录。承包商将很快被分配。",
     ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
   },
   duplicateNotice: {
@@ -85,32 +85,6 @@ function isGreetingOnly(text: string): boolean {
   const t = text.toLowerCase().trim();
   return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
 }
-
-/* ================= LOCK LANGUAGE ON FIRST MEANINGFUL MESSAGE ================= */
-if (
-  !session.language &&
-  !isGreetingOnly(description_raw)
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({ language: detectedLang })
-    .eq("id", session.id);
-
-  session.language = detectedLang;
-}
-
-/* ================= RESOLVE FINAL LANGUAGE ================= */
-const lang =
-  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
-
-
-/* ================= MEANINGFUL MESSAGE CHECK ================= */
-function isMeaningfulMessage(text: string): boolean {
-  if (!text) return false;
-  if (isGreetingOnly(text)) return false;
-  return text.trim().length >= 5;
-}
-
 
 /* ================= CLEANER ================= */
 function cleanTranscript(text: string): string {
@@ -208,22 +182,27 @@ export default async function handler(
       session = data;
     }
 
-    /* ================= GREETING (NO LANGUAGE LOCK) ================= */
+    /* ================= GREETING ================= */
     if (isGreetingOnly(description_raw)) {
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
+    /* ================= 🔒 LOCK LANGUAGE HERE (FIX) ================= */
+    if (!session.language) {
+      await supabase
+        .from("conversation_sessions")
+        .update({ language: detectedLang })
+        .eq("id", session.id);
 
-// ✅ Always prefer persisted language AFTER update
-const lang =
-  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+      session.language = detectedLang;
+    }
 
+    const lang = session.language as "en" | "ms" | "zh" | "ta";
 
     /* ================= CREATE TICKET ================= */
-    const { data: ticket } = await supabase
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         condo_id,
@@ -233,6 +212,8 @@ const lang =
       })
       .select()
       .single();
+
+    if (error || !ticket) throw error;
 
     /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
