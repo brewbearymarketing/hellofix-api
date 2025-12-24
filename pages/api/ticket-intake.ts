@@ -86,6 +86,24 @@ function isGreetingOnly(text: string): boolean {
   return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
 }
 
+/* ================= LOCK LANGUAGE ON FIRST MEANINGFUL MESSAGE ================= */
+if (
+  !session.language &&
+  !isGreetingOnly(description_raw)
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({ language: detectedLang })
+    .eq("id", session.id);
+
+  session.language = detectedLang;
+}
+
+/* ================= RESOLVE FINAL LANGUAGE ================= */
+const lang =
+  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+
+
 /* ================= MEANINGFUL MESSAGE CHECK ================= */
 function isMeaningfulMessage(text: string): boolean {
   if (!text) return false;
@@ -198,19 +216,6 @@ export default async function handler(
     }
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    
-// ✅ Persist language ONLY on first meaningful message
-if (
-  isMeaningfulMessage(description_raw) &&
-  (!session.language || session.language === "en")
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({ language: detectedLang })
-    .eq("id", session.id);
-
-  session.language = detectedLang;
-}
 
 // ✅ Always prefer persisted language AFTER update
 const lang =
