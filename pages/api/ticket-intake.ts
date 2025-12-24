@@ -190,17 +190,24 @@ export default async function handler(
     }
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    if (!session.language) {
-      await supabase
-        .from("conversation_sessions")
-        .update({ language: detectedLang })
-        .eq("id", session.id);
+    
+// ✅ Persist language ONLY on first meaningful message
+if (
+  isMeaningfulMessage(description_raw) &&
+  (!session.language || session.language === "en")
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({ language: detectedLang })
+    .eq("id", session.id);
 
-      session.language = detectedLang;
-    }
+  session.language = detectedLang;
+}
 
-    const lang =
-      (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+// ✅ Always prefer persisted language AFTER update
+const lang =
+  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+
 
     /* ================= CREATE TICKET ================= */
     const { data: ticket } = await supabase
