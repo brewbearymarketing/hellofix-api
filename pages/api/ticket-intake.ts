@@ -13,6 +13,63 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+/* ================= KEYWORDS (RESTORED) ================= */
+const COMMON_AREA_KEYWORDS = [
+  "lobby","lift","elevator","parking","corridor","staircase",
+  "garbage","trash","bin room","pool","gym",
+  "lif","lobi","koridor","tangga","tempat letak kereta",
+  "rumah sampah","tong sampah",
+  "电梯","走廊","停车场","垃圾房","泳池",
+  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
+];
+
+const OWN_UNIT_KEYWORDS = [
+  "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
+  "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
+"lampu rumah","lampu bilik",
+  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
+  "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
+];
+
+function keywordMatch(text: string, keywords: string[]) {
+  const t = text.toLowerCase();
+  return keywords.some(k => t.includes(k.toLowerCase()));
+}
+
+/* ================= AI CLASSIFIER (RESTORED) ================= */
+async function aiClassify(text: string): Promise<{
+  category: "unit" | "common_area" | "mixed" | "uncertain";
+  confidence: number;
+}> {
+  if (!openai) return { category: "uncertain", confidence: 0 };
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    return {
+      category: obj.category ?? "uncertain",
+      confidence: Number(obj.confidence ?? 0)
+    };
+  } catch {
+    return { category: "uncertain", confidence: 0 };
+  }
+}
+
 /* ================= LANGUAGE DETECTOR ================= */
 function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   if (!text) return "en";
@@ -45,11 +102,11 @@ const AUTO_REPLIES = {
     en: "✅ Your issue has been reported. We will assign a contractor shortly.",
     ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
     zh: "✅ 您的问题已记录。承包商将很快被分配。",
-    ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது. விரைவில் தொழிலாளி நியமிக்கப்படுவார்."
+    ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
   },
   duplicateNotice: {
     en: "⚠️ A similar issue was reported earlier. We’ve linked your report.",
-    ms: "⚠️ Isu serupa telah dilaporkan sebelum ini. Aduan anda telah dikaitkan.",
+    ms: "⚠️ Isu serupa telah dilaporkan sebelum ini.",
     zh: "⚠️ 检测到类似问题，已为您关联。",
     ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
   }
@@ -130,7 +187,6 @@ export default async function handler(
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
-
     const description_raw = await normalizeIncomingMessage(body);
     const detectedLang = detectLanguage(description_raw);
 
@@ -138,74 +194,15 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle",
-          language: detectedLang
-        })
-        .select()
-        .single();
-      session = data;
-    }
-
-    if (!session.language) {
-      await supabase
-        .from("conversation_sessions")
-        .update({ language: detectedLang })
-        .eq("id", session.id);
-      session.language = detectedLang;
-    }
-
-    const lang = session.language as "en" | "ms" | "zh" | "ta";
-
-    /* ================= GREETING ================= */
+    /* ===== GREETING ===== */
     if (isGreetingOnly(description_raw)) {
       return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[lang]
+        reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
-
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
-
-    /* ================= CREATE TICKET ================= */
-    const { data: ticket, error } = await supabase
+    /* ===== CREATE TICKET ===== */
+    const { data: ticket } = await supabase
       .from("tickets")
       .insert({
         condo_id,
@@ -216,9 +213,7 @@ export default async function handler(
       .select()
       .single();
 
-    if (error || !ticket) throw error;
-
-    /* ================= EMBEDDING ================= */
+    /* ===== DUPLICATE DETECTION ===== */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
@@ -235,7 +230,6 @@ export default async function handler(
         .update({ embedding })
         .eq("id", ticket.id);
 
-      /* ================= DUPLICATE CHECK ================= */
       const { data: relation } = await supabase.rpc(
         "detect_ticket_relation",
         {
@@ -250,12 +244,10 @@ export default async function handler(
 
       if (relation?.length) {
         const r = relation[0];
-
         duplicate_of =
           r.relation_type === "hard_duplicate"
             ? r.related_ticket_id
             : null;
-
         related_to =
           r.relation_type === "related"
             ? r.related_ticket_id
@@ -272,22 +264,11 @@ export default async function handler(
       }
     }
 
-    await supabase
-      .from("conversation_sessions")
-      .update({
-        state: "ticket_created",
-        current_ticket_id: ticket.id,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", session.id);
-
     return res.status(200).json({
       reply: duplicate_of
-        ? AUTO_REPLIES.duplicateNotice[lang]
-        : AUTO_REPLIES.ticketCreated[lang],
-      ticket_id: ticket.id,
-      duplicate_of,
-      related_to
+        ? AUTO_REPLIES.duplicateNotice[detectedLang]
+        : AUTO_REPLIES.ticketCreated[detectedLang],
+      ticket_id: ticket.id
     });
 
   } catch (err: any) {
