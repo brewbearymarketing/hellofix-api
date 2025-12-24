@@ -177,6 +177,33 @@ export default async function handler(
       });
     }
 
+    /* ===== INTENT DETECTION ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
+
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
+
     /* ================= CREATE TICKET ================= */
     const { data: ticket, error } = await supabase
       .from("tickets")
