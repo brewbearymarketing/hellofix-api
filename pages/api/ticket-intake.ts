@@ -86,6 +86,14 @@ function isGreetingOnly(text: string): boolean {
   return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
 }
 
+/* ================= MEANINGFUL MESSAGE CHECK ================= */
+function isMeaningfulMessage(text: string): boolean {
+  if (!text) return false;
+  if (isGreetingOnly(text)) return false;
+  return text.trim().length >= 5;
+}
+
+
 /* ================= CLEANER ================= */
 function cleanTranscript(text: string): string {
   if (!text) return text;
