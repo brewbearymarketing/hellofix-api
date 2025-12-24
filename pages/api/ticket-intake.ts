@@ -32,9 +32,89 @@ const OWN_UNIT_KEYWORDS = [
   "அறை","சமையலறை"
 ];
 
+const AMBIGUOUS_KEYWORDS = [
+  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
+  "厕所","空调","கழிப்பிடம்","चिराग","灯"
+];
+
 function keywordMatch(text: string, keywords: string[]) {
   const t = text.toLowerCase();
   return keywords.some(k => t.includes(k.toLowerCase()));
+}
+
+/* ================= AI CLASSIFIER ================= */
+async function aiClassify(text: string): Promise<{
+  category: "unit" | "common_area" | "mixed" | "uncertain";
+  confidence: number;
+}> {
+  if (!openai) return { category: "uncertain", confidence: 0 };
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    return {
+      category: obj.category ?? "uncertain",
+      confidence: Number(obj.confidence ?? 0)
+    };
+  } catch {
+    return { category: "uncertain", confidence: 0 };
+  }
+}
+
+/* ================= MALAYSIAN AI NORMALISER ================= */
+async function aiCleanDescription(text: string): Promise<string> {
+  if (!openai) return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a Malaysian property maintenance assistant.
+
+Rewrite the issue into ONE short, clear maintenance sentence in English.
+
+Rules:
+- Remove filler words (lah, lor, leh, ah, eh).
+- Translate Malaysian slang / rojak into standard English.
+- Translate Malay / Chinese / Tamil words if present.
+- Keep ONLY the asset + problem + location if mentioned.
+- No emojis. No apologies. No extra words.
+- Do NOT guess causes. Do NOT add solutions.
+
+Examples:
+"aircond rosak tak sejuk bilik master" → "Master bedroom air conditioner not cooling"
+"paip bocor bawah sink dapur" → "Kitchen sink pipe leaking"
+"lift rosak tingkat 5" → "Elevator malfunction at level 5"
+"lampu koridor level 3 tak nyala" → "Corridor light not working at level 3"
+`
+        },
+        { role: "user", content: text }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
 }
 
 /* ================= LANGUAGE DETECTOR ================= */
