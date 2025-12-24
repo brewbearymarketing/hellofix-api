@@ -13,7 +13,7 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-/* ================= KEYWORDS (RESTORED) ================= */
+/* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
   "garbage","trash","bin room","pool","gym",
@@ -24,50 +24,17 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
-  "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
-"lampu rumah","lampu bilik",
+  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
+  "master toilet","house bathroom","house lamp","room lamp",
+  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
+  "bilik air rumah","lampu rumah","lampu bilik",
   "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
-  "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
+  "அறை","சமையலறை"
 ];
 
 function keywordMatch(text: string, keywords: string[]) {
   const t = text.toLowerCase();
   return keywords.some(k => t.includes(k.toLowerCase()));
-}
-
-/* ================= AI CLASSIFIER (RESTORED) ================= */
-async function aiClassify(text: string): Promise<{
-  category: "unit" | "common_area" | "mixed" | "uncertain";
-  confidence: number;
-}> {
-  if (!openai) return { category: "uncertain", confidence: 0 };
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-
-    return {
-      category: obj.category ?? "uncertain",
-      confidence: Number(obj.confidence ?? 0)
-    };
-  } catch {
-    return { category: "uncertain", confidence: 0 };
-  }
 }
 
 /* ================= LANGUAGE DETECTOR ================= */
@@ -101,7 +68,7 @@ const AUTO_REPLIES = {
   ticketCreated: {
     en: "✅ Your issue has been reported. We will assign a contractor shortly.",
     ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
-    zh: "✅ 您的问题已记录。承包商将很快被分配。",
+    zh: "✅ 您的问题已记录。",
     ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
   },
   duplicateNotice: {
@@ -157,7 +124,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   }
 }
 
-/* ================= MESSAGE NORMALIZER ================= */
+/* ================= NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
 
@@ -194,14 +161,48 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ===== GREETING ===== */
+    /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+
+    /* ================= GREETING (NO LANGUAGE LOCK) ================= */
     if (isGreetingOnly(description_raw)) {
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ===== CREATE TICKET ===== */
+    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
+    if (!session.language) {
+      await supabase
+        .from("conversation_sessions")
+        .update({ language: detectedLang })
+        .eq("id", session.id);
+
+      session.language = detectedLang;
+    }
+
+    const lang =
+      (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+
+    /* ================= CREATE TICKET ================= */
     const { data: ticket } = await supabase
       .from("tickets")
       .insert({
@@ -213,7 +214,7 @@ export default async function handler(
       .select()
       .single();
 
-    /* ===== DUPLICATE DETECTION ===== */
+    /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
@@ -266,8 +267,8 @@ export default async function handler(
 
     return res.status(200).json({
       reply: duplicate_of
-        ? AUTO_REPLIES.duplicateNotice[detectedLang]
-        : AUTO_REPLIES.ticketCreated[detectedLang],
+        ? AUTO_REPLIES.duplicateNotice[lang]
+        : AUTO_REPLIES.ticketCreated[lang],
       ticket_id: ticket.id
     });
 
