@@ -45,16 +45,26 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
 
   const t = text.toLowerCase();
   if (
-    t === "hai" ||
-    t === "salam" ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("tandas") ||
+    t.includes("lampu") ||
     t.includes("tak") ||
     t.includes("nak") ||
-    t.includes("rosak") ||
-    t.includes("bocor") ||
     t.includes("tolong")
   ) return "ms";
 
   return "en";
+}
+
+/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
+function stripWhatsAppNoise(text: string): string {
+  return text
+    .replace(/[0-9️⃣•\-–—]/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 /* ================= AUTO REPLIES ================= */
@@ -68,7 +78,7 @@ const AUTO_REPLIES = {
   ticketCreated: {
     en: "✅ Your issue has been reported. We will assign a contractor shortly.",
     ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
-    zh: "✅ 您的问题已记录。承包商将很快被分配。",
+    zh: "✅ 您的问题已记录。",
     ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
   },
   duplicateNotice: {
@@ -154,8 +164,17 @@ export default async function handler(
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
+
     const description_raw = await normalizeIncomingMessage(body);
-    const detectedLang = detectLanguage(description_raw);
+
+    // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
+    const rawForLang = stripWhatsAppNoise(
+      typeof body.description_raw === "string"
+        ? body.description_raw
+        : description_raw
+    );
+
+    const detectedLang = detectLanguage(rawForLang);
 
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -183,13 +202,13 @@ export default async function handler(
     }
 
     /* ================= GREETING ================= */
-    if (isGreetingOnly(description_raw)) {
+    if (isGreetingOnly(rawForLang)) {
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ================= 🔒 LOCK LANGUAGE HERE (FIX) ================= */
+    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
     if (!session.language) {
       await supabase
         .from("conversation_sessions")
@@ -202,7 +221,7 @@ export default async function handler(
     const lang = session.language as "en" | "ms" | "zh" | "ta";
 
     /* ================= CREATE TICKET ================= */
-    const { data: ticket, error } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
       .insert({
         condo_id,
@@ -212,8 +231,6 @@ export default async function handler(
       })
       .select()
       .single();
-
-    if (error || !ticket) throw error;
 
     /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
