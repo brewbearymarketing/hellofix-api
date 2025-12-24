@@ -210,21 +210,54 @@ export default async function handler(
     }
 
     /* ================= LOAD SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
+/* ================= SESSION LOAD / EXPIRE (24 HOURS) ================= */
 
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({ condo_id, phone_number, state: "idle" })
-        .select()
-        .single();
-      session = data;
-    }
+const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000; // ✅ 24 hours
+
+let { data: session } = await supabase
+  .from("conversation_sessions")
+  .select("*")
+  .eq("condo_id", condo_id)
+  .eq("phone_number", phone_number)
+  .maybeSingle();
+
+/* ---- If session exists, check expiry ---- */
+if (session) {
+  const lastUpdated = new Date(session.updated_at).getTime();
+  const now = Date.now();
+
+  const isExpired = now - lastUpdated > SESSION_TIMEOUT_MS;
+
+  if (isExpired) {
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "idle",
+        current_ticket_id: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", session.id);
+
+    // reset in-memory session
+    session.state = "idle";
+    session.current_ticket_id = null;
+  }
+}
+
+/* ---- If no session, create one ---- */
+if (!session) {
+  const { data } = await supabase
+    .from("conversation_sessions")
+    .insert({
+      condo_id,
+      phone_number,
+      state: "idle"
+    })
+    .select()
+    .single();
+
+  session = data;
+}
 
     /* ================= GREETING BLOCK ================= */
     if (isGreetingOnly(description_raw)) {
