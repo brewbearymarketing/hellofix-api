@@ -13,6 +13,58 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+/* ================= LANGUAGE DETECTOR (NEW) ================= */
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+  if (!text) return "en";
+  if (/[一-龥]/.test(text)) return "zh";     // Chinese
+  if (/[அ-ஹ]/.test(text)) return "ta";     // Tamil
+
+  const t = text.toLowerCase();
+  if (
+    t.includes("tak") ||
+    t.includes("nak") ||
+    t.includes("rosak") ||
+    t.includes("bocor") ||
+    t.includes("boleh")
+  ) return "ms";
+
+  return "en";
+}
+
+/* ================= AUTO REPLIES ================= */
+const AUTO_REPLIES = {
+  greeting: {
+    en: "Hi 👋 Please describe the issue you are facing.",
+    ms: "Hai 👋 Sila terangkan masalah yang anda hadapi.",
+    zh: "你好 👋 请描述您遇到的问题。",
+    ta: "வணக்கம் 👋 நீங்கள் எதிர்கொள்ளும் பிரச்சினையை விவரிக்கவும்."
+  },
+  continuePrompt: {
+    en: "You recently reported an issue. Reply:\n1️⃣ Continue previous issue\n2️⃣ Start a new issue",
+    ms: "Anda baru melaporkan masalah. Balas:\n1️⃣ Teruskan isu sebelum ini\n2️⃣ Lapor isu baharu",
+    zh: "您最近已提交问题。回复：\n1️⃣ 继续之前的问题\n2️⃣ 提交新问题",
+    ta: "நீங்கள் சமீபத்தில் ஒரு பிரச்சினையை பதிவு செய்தீர்கள். பதிலளிக்கவும்:\n1️⃣ முந்தையதை தொடர\n2️⃣ புதிய பிரச்சினை"
+  },
+  continueOk: {
+    en: "Okay 👍 Please continue describing the issue.",
+    ms: "Baik 👍 Sila teruskan penerangan masalah.",
+    zh: "好的 👍 请继续描述问题。",
+    ta: "சரி 👍 பிரச்சினையை தொடரவும்."
+  },
+  newIssue: {
+    en: "Alright 👍 Please describe the new issue.",
+    ms: "Baik 👍 Sila terangkan isu baharu.",
+    zh: "好的 👍 请描述新问题。",
+    ta: "சரி 👍 புதிய பிரச்சினையை விவரிக்கவும்."
+  },
+  multiIssue: {
+    en: "I detected multiple issues. Reply:\n1️⃣ Same unit & same contractor\n2️⃣ Separate issues",
+    ms: "Saya mengesan beberapa masalah. Balas:\n1️⃣ Unit & kontraktor sama\n2️⃣ Masalah berasingan",
+    zh: "检测到多个问题。回复：\n1️⃣ 同一单位和承包商\n2️⃣ 分开处理",
+    ta: "பல பிரச்சினைகள் கண்டறியப்பட்டன. பதிலளிக்கவும்:\n1️⃣ அதே யூனிட்\n2️⃣ தனித்தனி பிரச்சினைகள்"
+  }
+};
+
 /* ================= GREETING GUARD ================= */
 function isGreetingOnly(text: string): boolean {
   if (!text) return true;
@@ -100,35 +152,7 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
-/* ================= MALAYSIAN AI NORMALISER ================= */
-async function aiCleanDescription(text: string): Promise<string> {
-  if (!openai) return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-Rewrite into ONE clear maintenance sentence.
-Translate Malaysian slang if needed.
-Remove filler words.
-No guessing. No solution.
-`
-        },
-        { role: "user", content: text }
-      ]
-    });
-
-    return r.choices[0]?.message?.content?.trim() || text;
-  } catch {
-    return text;
-  }
-}
-
-/* ================= TRANSCRIPT CLEANER ================= */
+/* ================= CLEANERS ================= */
 function cleanTranscript(text: string): string {
   if (!text) return text;
   let t = text.toLowerCase();
@@ -153,7 +177,6 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
     if (!res.ok) return null;
 
     const buffer = await res.arrayBuffer();
-
     const file = await toFile(Buffer.from(buffer), "voice");
 
     const transcript = await openai.audio.transcriptions.create({
@@ -199,13 +222,13 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
-    const description_clean = await aiCleanDescription(description_raw);
+    const lang = detectLanguage(description_raw);
 
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ================= SESSION LOAD / EXPIRE (24 HOURS) ================= */
+    /* ================= SESSION LOAD / EXPIRE ================= */
     const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
     let { data: session } = await supabase
@@ -241,94 +264,33 @@ export default async function handler(
         .insert({ condo_id, phone_number, state: "idle" })
         .select()
         .single();
-
       session = data;
     }
 
-    /* ================= CONTINUE / NEW ISSUE CONFIRM ================= */
+    /* ================= CONTINUE / NEW ISSUE ================= */
     if (session.state === "closed") {
       if (description_raw === "1") {
-        await supabase
-          .from("conversation_sessions")
-          .update({ state: "collecting" })
-          .eq("id", session.id);
-
-        return res.status(200).json({
-          reply: "Okay 👍 Please continue describing the issue."
-        });
+        await supabase.from("conversation_sessions").update({ state: "collecting" }).eq("id", session.id);
+        return res.status(200).json({ reply: AUTO_REPLIES.continueOk[lang] });
       }
 
       if (description_raw === "2" || isNewIssueIntent(description_raw)) {
-        await supabase
-          .from("conversation_sessions")
-          .update({
-            state: "idle",
-            current_ticket_id: null
-          })
-          .eq("id", session.id);
-
-        return res.status(200).json({
-          reply: "Alright 👍 Please describe the new issue."
-        });
+        await supabase.from("conversation_sessions").update({ state: "idle", current_ticket_id: null }).eq("id", session.id);
+        return res.status(200).json({ reply: AUTO_REPLIES.newIssue[lang] });
       }
 
-      return res.status(200).json({
-        reply:
-          "You recently reported an issue. Reply:\n1️⃣ Continue previous issue\n2️⃣ Start a new issue"
-      });
+      return res.status(200).json({ reply: AUTO_REPLIES.continuePrompt[lang] });
     }
 
-    /* ================= GREETING BLOCK ================= */
+    /* ================= GREETING ================= */
     if (isGreetingOnly(description_raw)) {
-      return res.status(200).json({
-        reply: "Hi 👋 Please describe the issue you are facing."
-      });
+      return res.status(200).json({ reply: AUTO_REPLIES.greeting[lang] });
     }
 
-    /* ================= INTENT DETECTION ================= */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
-      "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
-
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
-
-    /* ================= MULTI-ISSUE CONFIRM ================= */
-    const hasMultipleIssues =
-      intent_category === "mixed" ||
-      description_clean.includes(" and ") ||
-      description_clean.includes(",");
-
-    if (hasMultipleIssues && session.state !== "confirming_split") {
-      await supabase
-        .from("conversation_sessions")
-        .update({ state: "confirming_split" })
-        .eq("id", session.id);
-
-      return res.status(200).json({
-        reply:
-          "I detected multiple issues. Reply:\n1️⃣ Same unit & same contractor\n2️⃣ Separate issues"
-      });
+    /* ================= MULTI ISSUE ================= */
+    if (description_raw.includes(" and ") || description_raw.includes(",")) {
+      await supabase.from("conversation_sessions").update({ state: "confirming_split" }).eq("id", session.id);
+      return res.status(200).json({ reply: AUTO_REPLIES.multiIssue[lang] });
     }
 
     return res.status(200).json({ ok: true });
