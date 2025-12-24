@@ -18,7 +18,7 @@ function isGreetingOnly(text: string): boolean {
   if (!text) return true;
   const t = text.toLowerCase().trim();
   return (
-    ["hi","hello","hey","hai","yo","test","ping","ok","okay"].includes(t) ||
+    ["hi", "hello", "hey", "hai", "yo", "test", "ping", "ok", "okay"].includes(t) ||
     t.length < 5
   );
 }
@@ -154,11 +154,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
 
     const buffer = await res.arrayBuffer();
 
-    const file = await toFile(
-      Buffer.from(buffer),
-      "voice",
-      { type: res.headers.get("content-type") || "application/octet-stream" }
-    );
+    const file = await toFile(Buffer.from(buffer), "voice");
 
     const transcript = await openai.audio.transcriptions.create({
       file,
@@ -171,7 +167,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   }
 }
 
-/* ================= MESSAGE NORMALIZER (FIXED) ================= */
+/* ================= MESSAGE NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
 
@@ -209,55 +205,78 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ================= LOAD SESSION ================= */
-/* ================= SESSION LOAD / EXPIRE (24 HOURS) ================= */
+    /* ================= SESSION LOAD / EXPIRE (24 HOURS) ================= */
+    const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
-const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000; // ✅ 24 hours
-
-let { data: session } = await supabase
-  .from("conversation_sessions")
-  .select("*")
-  .eq("condo_id", condo_id)
-  .eq("phone_number", phone_number)
-  .maybeSingle();
-
-/* ---- If session exists, check expiry ---- */
-if (session) {
-  const lastUpdated = new Date(session.updated_at).getTime();
-  const now = Date.now();
-
-  const isExpired = now - lastUpdated > SESSION_TIMEOUT_MS;
-
-  if (isExpired) {
-    await supabase
+    let { data: session } = await supabase
       .from("conversation_sessions")
-      .update({
-        state: "idle",
-        current_ticket_id: null,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", session.id);
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
 
-    // reset in-memory session
-    session.state = "idle";
-    session.current_ticket_id = null;
-  }
-}
+    if (session) {
+      const expired =
+        Date.now() - new Date(session.updated_at).getTime() >
+        SESSION_TIMEOUT_MS;
 
-/* ---- If no session, create one ---- */
-if (!session) {
-  const { data } = await supabase
-    .from("conversation_sessions")
-    .insert({
-      condo_id,
-      phone_number,
-      state: "idle"
-    })
-    .select()
-    .single();
+      if (expired) {
+        await supabase
+          .from("conversation_sessions")
+          .update({
+            state: "idle",
+            current_ticket_id: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", session.id);
 
-  session = data;
-}
+        session.state = "idle";
+        session.current_ticket_id = null;
+      }
+    }
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({ condo_id, phone_number, state: "idle" })
+        .select()
+        .single();
+
+      session = data;
+    }
+
+    /* ================= CONTINUE / NEW ISSUE CONFIRM ================= */
+    if (session.state === "closed") {
+      if (description_raw === "1") {
+        await supabase
+          .from("conversation_sessions")
+          .update({ state: "collecting" })
+          .eq("id", session.id);
+
+        return res.status(200).json({
+          reply: "Okay 👍 Please continue describing the issue."
+        });
+      }
+
+      if (description_raw === "2" || isNewIssueIntent(description_raw)) {
+        await supabase
+          .from("conversation_sessions")
+          .update({
+            state: "idle",
+            current_ticket_id: null
+          })
+          .eq("id", session.id);
+
+        return res.status(200).json({
+          reply: "Alright 👍 Please describe the new issue."
+        });
+      }
+
+      return res.status(200).json({
+        reply:
+          "You recently reported an issue. Reply:\n1️⃣ Continue previous issue\n2️⃣ Start a new issue"
+      });
+    }
 
     /* ================= GREETING BLOCK ================= */
     if (isGreetingOnly(description_raw)) {
@@ -267,7 +286,8 @@ if (!session) {
     }
 
     /* ================= INTENT DETECTION ================= */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
 
@@ -293,7 +313,7 @@ if (!session) {
       }
     }
 
-    /* ================= MULTI-ISSUE DETECTION ================= */
+    /* ================= MULTI-ISSUE CONFIRM ================= */
     const hasMultipleIssues =
       intent_category === "mixed" ||
       description_clean.includes(" and ") ||
