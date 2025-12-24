@@ -1,4 +1,3 @@
-// ================= SAME IMPORTS =================
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
@@ -101,8 +100,92 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
-/* ================= MESSAGE NORMALIZER / VOICE ================= */
-// (UNCHANGED — kept exactly as you had)
+/* ================= MALAYSIAN AI NORMALISER ================= */
+async function aiCleanDescription(text: string): Promise<string> {
+  if (!openai) return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+Rewrite into ONE clear maintenance sentence.
+Translate Malaysian slang if needed.
+Remove filler words.
+No guessing. No solution.
+`
+        },
+        { role: "user", content: text }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
+}
+
+/* ================= TRANSCRIPT CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+  let t = text.toLowerCase();
+  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= VOICE ================= */
+async function transcribeVoice(mediaUrl: string): Promise<string | null> {
+  if (!openai) return null;
+
+  try {
+    const auth = Buffer.from(
+      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+    ).toString("base64");
+
+    const res = await fetch(mediaUrl, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
+
+    if (!res.ok) return null;
+
+    const buffer = await res.arrayBuffer();
+
+    const file = await toFile(
+      Buffer.from(buffer),
+      "voice",
+      { type: res.headers.get("content-type") || "application/octet-stream" }
+    );
+
+    const transcript = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1"
+    });
+
+    return transcript.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ================= MESSAGE NORMALIZER (FIXED) ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text: string = body.description_raw || "";
+
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  if (!text && body.image_url) {
+    text = "Photo evidence provided. Issue description pending.";
+  }
+
+  return cleanTranscript(text);
+}
 
 /* ================= API HANDLER ================= */
 export default async function handler(
@@ -150,7 +233,7 @@ export default async function handler(
       });
     }
 
-    /* ================= INTENT DETECTION (MOVED UP ✅) ================= */
+    /* ================= INTENT DETECTION ================= */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
@@ -177,7 +260,7 @@ export default async function handler(
       }
     }
 
-    /* ================= MULTI-ISSUE DETECTION (NOW SAFE) ================= */
+    /* ================= MULTI-ISSUE DETECTION ================= */
     const hasMultipleIssues =
       intent_category === "mixed" ||
       description_clean.includes(" and ") ||
@@ -195,8 +278,7 @@ export default async function handler(
       });
     }
 
-    /* ================= CREATE TICKET (UNCHANGED) ================= */
-    // (rest of your ticket creation logic continues here)
+    return res.status(200).json({ ok: true });
 
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
