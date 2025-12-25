@@ -261,6 +261,49 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+     /* ===== VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
+
+    const unit_id = resident.unit_id;
+
+    /* ===== INTENT DETECTION ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
+
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
+
     /* ================= SESSION ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
