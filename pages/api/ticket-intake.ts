@@ -302,17 +302,25 @@ export default async function handler(
     const lang = session.language as "en" | "ms" | "zh" | "ta";
 
     /* ================= CREATE TICKET ================= */
-    const { data: ticket } = await supabase
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
         description_raw,
         description_clean,
         source: "whatsapp",
-        status: "new"
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
       .select()
       .single();
+
+    if (error || !ticket) throw error;
 
     /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
