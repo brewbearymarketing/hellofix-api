@@ -246,6 +246,7 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
+    const description_clean = await aiCleanDescription(description_raw);
 
     // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
     const rawForLang = stripWhatsAppNoise(
@@ -306,6 +307,7 @@ export default async function handler(
       .insert({
         condo_id,
         description_raw,
+        description_clean,
         source: "whatsapp",
         status: "new"
       })
