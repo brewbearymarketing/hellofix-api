@@ -46,6 +46,79 @@ function keywordMatch(text: string, keywords: string[]) {
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
+/* ================= HELPERS (MOVED OUTSIDE HANDLER) ================= */
+/* ================= GREETING DETECTOR ================= */
+
+/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
+function stripWhatsAppNoise(text: string): string {
+  return text
+
+    .replace(/[0-9️⃣•\-–—]/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isPureGreeting(text: string): boolean {
+  if (!text) return true;
+  const t = stripWhatsAppNoise(text);
+
+  // common greeting patterns
+  const greetingPatterns = [
+
+    /^hi+$/,
+    /^hello+$/,
+    /^hey+$/,
+    /^hai+$/,
+    /^helo+$/,
+    /^yo+$/,
+    /^salam$/,
+    /^ass?alamualaikum$/,
+    /^👋+$/,
+    /^wave$/,
+    
+  ];
+
+  // if matches greeting pattern AND no maintenance keywords 
+  const isGreetingWord = greetingPatterns.some(r => r.test(t));
+
+  const hasMaintenanceSignal =
+
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken");
+
+  return isGreetingWord && !hasMaintenanceSignal;
+
+}
+
+/* ================= GREETING GUARD ================= */
+function isGreetingOnly(text: string): boolean {
+  if (!text) return true;
+  const t = text.toLowerCase().trim();
+  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
+}
+
+/* ================= UPDATE SESSION ================= */
+async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+
+}
+
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -224,16 +297,6 @@ Rules:
   }
 }
 
-/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
-function stripWhatsAppNoise(text: string): string {
-  return text
-    .replace(/[0-9️⃣•\-–—]/g, " ")
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
 /* ================= AUTO REPLIES ================= */
 const AUTO_REPLIES = {
   greeting: {
@@ -361,19 +424,7 @@ const detectedLang = detectLanguage(rawForLang);
         .single();
       session = data;
     }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
-}
+  
 
         /* ================= GREETING ================= */
 
@@ -391,49 +442,7 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
     reply: AUTO_REPLIES.greeting[detectedLang]
   });
 }
-
-/* ================= GREETING DETECTOR ================= */
-    
-    function isPureGreeting(text: string): boolean {
-  if (!text) return true;
-
-  const t = stripWhatsAppNoise(text);
-
-  // common greeting patterns
-  const greetingPatterns = [
-    /^hi+$/,
-    /^hello+$/,
-    /^hey+$/,
-    /^hai+$/,
-    /^helo+$/,
-    /^yo+$/,
-    /^salam$/,
-    /^ass?alamualaikum$/,
-    /^👋+$/,
-    /^wave$/,
-  ];
-
-  // if matches greeting pattern AND no maintenance keywords
-  const isGreetingWord = greetingPatterns.some(r => r.test(t));
-
-  const hasMaintenanceSignal =
-    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
-    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
-    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
-    t.includes("bocor") ||
-    t.includes("rosak") ||
-    t.includes("leak") ||
-    t.includes("broken");
-
-  return isGreetingWord && !hasMaintenanceSignal;
-}
-
-/* ================= GREETING GUARD ================= */
-function isGreetingOnly(text: string): boolean {
-  if (!text) return true;
-  const t = text.toLowerCase().trim();
-  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
-}
+  
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
