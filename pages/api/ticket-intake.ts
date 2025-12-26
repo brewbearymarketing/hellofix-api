@@ -393,8 +393,8 @@ async function handler(
 
     // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
 const rawText =
-  typeof body.description_raw === "string"
-    ? body.description_raw
+  typeof description_raw === "string"
+    ? description_raw
     : "";
 
 const rawForLang = stripWhatsAppNoise(rawText);
