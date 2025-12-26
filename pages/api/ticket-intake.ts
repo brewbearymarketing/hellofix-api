@@ -336,9 +336,32 @@ if (unitHit && commonHit) {
         .single();
       session = data;
     }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
+
 
     /* ================= GREETING ================= */
 if (isPureGreeting(body.description_raw || "")) {
+
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "greeted",
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
   return res.status(200).json({
     reply: AUTO_REPLIES.greeting[detectedLang]
   });
