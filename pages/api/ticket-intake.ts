@@ -316,21 +316,12 @@ if (unitHit && commonHit) {
 }
 
     /* ================= GREETING ================= */
-if (isPureGreeting(body.description_raw || "")) {
-
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "greeted",
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
-
+if (isPureGreeting(rawText)) {
   return res.status(200).json({
     reply: AUTO_REPLIES.greeting[detectedLang]
   });
 }
-
+    
     function isPureGreeting(text: string): boolean {
   if (!text) return true;
 
