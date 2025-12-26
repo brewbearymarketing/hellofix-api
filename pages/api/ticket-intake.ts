@@ -374,7 +374,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 }
 
 /* ================= API HANDLER ================= */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -676,3 +676,6 @@ if (session.state === "drafting" && rawText === "1") {
     });
   }
 }
+
+export default handler;
+
