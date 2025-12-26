@@ -278,29 +278,29 @@ export default async function handler(
     const unit_id = resident.unit_id;
 
 /* ===== INTENT DETECTION (FIXED) ===== */
-let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-let intent_source: "keyword" | "ai" | "none" = "none";
-let intent_confidence = 1;
-
-// 🔑 IMPORTANT: use CLEAN description
 const textForIntent = description_clean.toLowerCase();
 
 const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
 const unitHit = keywordMatch(textForIntent, OWN_UNIT_KEYWORDS);
 const ambiguousHit = keywordMatch(textForIntent, AMBIGUOUS_KEYWORDS);
 
-// ✅ RULE PRIORITY
+// 🔑 RULE ORDER (IMPORTANT)
 if (unitHit && commonHit) {
   intent_category = "mixed";
   intent_source = "keyword";
 
 } else if (unitHit) {
-  // 🔥 unit overrides ambiguity
+  // ✅ unit overrides ambiguous
   intent_category = "unit";
   intent_source = "keyword";
 
 } else if (commonHit) {
   intent_category = "common_area";
+  intent_source = "keyword";
+
+} else if (ambiguousHit) {
+  // ✅ ambiguous defaults to UNIT
+  intent_category = "unit";
   intent_source = "keyword";
 
 } else {
@@ -311,6 +311,7 @@ if (unitHit && commonHit) {
     intent_source = "ai";
   }
 }
+
 
     /* ================= SESSION ================= */
     let { data: session } = await supabase
@@ -334,11 +335,46 @@ if (unitHit && commonHit) {
     }
 
     /* ================= GREETING ================= */
-    if (isGreetingOnly(rawForLang)) {
-      return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[detectedLang]
-      });
-    }
+if (isPureGreeting(body.description_raw || "")) {
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
+
+    function isPureGreeting(text: string): boolean {
+  if (!text) return true;
+
+  const t = stripWhatsAppNoise(text);
+
+  // common greeting patterns
+  const greetingPatterns = [
+    /^hi+$/,
+    /^hello+$/,
+    /^hey+$/,
+    /^hai+$/,
+    /^helo+$/,
+    /^yo+$/,
+    /^salam$/,
+    /^ass?alamualaikum$/,
+    /^👋+$/,
+    /^wave$/,
+  ];
+
+  // if matches greeting pattern AND no maintenance keywords
+  const isGreetingWord = greetingPatterns.some(r => r.test(t));
+
+  const hasMaintenanceSignal =
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken");
+
+  return isGreetingWord && !hasMaintenanceSignal;
+}
+
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
     if (!session.language) {
