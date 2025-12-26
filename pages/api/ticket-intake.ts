@@ -216,56 +216,6 @@ const AUTO_REPLIES = {
   }
 };
 
-    /* ================= GREETING ================= */
-if (session.state === "idle" && isPureGreeting(rawText)) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "greeted",
-      language: detectedLang,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
-
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
-    
-    function isPureGreeting(text: string): boolean {
-  if (!text) return true;
-
-  const t = stripWhatsAppNoise(text);
-
-  // common greeting patterns
-  const greetingPatterns = [
-    /^hi+$/,
-    /^hello+$/,
-    /^hey+$/,
-    /^hai+$/,
-    /^helo+$/,
-    /^yo+$/,
-    /^salam$/,
-    /^ass?alamualaikum$/,
-    /^👋+$/,
-    /^wave$/,
-  ];
-
-  // if matches greeting pattern AND no maintenance keywords
-  const isGreetingWord = greetingPatterns.some(r => r.test(t));
-
-  const hasMaintenanceSignal =
-    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
-    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
-    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
-    t.includes("bocor") ||
-    t.includes("rosak") ||
-    t.includes("leak") ||
-    t.includes("broken");
-
-  return isGreetingWord && !hasMaintenanceSignal;
-}
-
 /* ================= VOICE ================= */
 async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   if (!openai) return null;
@@ -383,6 +333,56 @@ const detectedLang = detectLanguage(rawForLang);
       updated_at: new Date().toISOString()
     })
     .eq("id", sessionId);
+}
+
+        /* ================= GREETING ================= */
+if (session.state === "idle" && isPureGreeting(rawText)) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "greeted",
+      language: detectedLang,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
+    
+    function isPureGreeting(text: string): boolean {
+  if (!text) return true;
+
+  const t = stripWhatsAppNoise(text);
+
+  // common greeting patterns
+  const greetingPatterns = [
+    /^hi+$/,
+    /^hello+$/,
+    /^hey+$/,
+    /^hai+$/,
+    /^helo+$/,
+    /^yo+$/,
+    /^salam$/,
+    /^ass?alamualaikum$/,
+    /^👋+$/,
+    /^wave$/,
+  ];
+
+  // if matches greeting pattern AND no maintenance keywords
+  const isGreetingWord = greetingPatterns.some(r => r.test(t));
+
+  const hasMaintenanceSignal =
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken");
+
+  return isGreetingWord && !hasMaintenanceSignal;
 }
 
 /* ================= GREETING GUARD ================= */
