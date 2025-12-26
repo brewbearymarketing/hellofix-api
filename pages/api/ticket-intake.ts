@@ -184,6 +184,46 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   return "en";
 }
 
+/* ================= DISPLAY TRANSLATION (RESIDENT UX) ================= */
+async function translateForResident(
+  englishText: string,
+  lang: Lang
+): Promise<string> {
+  if (!openai) return englishText;
+  if (lang === "en") return englishText;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+Translate the maintenance sentence into the user's language.
+
+Rules:
+- Keep meaning EXACT.
+- Do NOT add details.
+- Do NOT remove details.
+- Short, natural, human.
+- No emojis.
+- Output ONLY the translated sentence.
+          `
+        },
+        {
+          role: "user",
+          content: \`Language: \${lang}\nText: \${englishText}\`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || englishText;
+  } catch {
+    return englishText;
+  }
+}
+
 /* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
 function stripWhatsAppNoise(text: string): string {
   return text
@@ -468,16 +508,25 @@ if (session.state === "greeted") {
     .from("conversation_sessions")
     .update({
       state: "drafting",
-      draft_description: description_clean,
+      draft_description: description_clean, // ✅ ALWAYS ENGLISH
       updated_at: new Date().toISOString()
     })
     .eq("id", session.id);
 
+  const displayText =
+    lang === "en"
+      ? description_clean
+      : await translateForResident(description_clean, lang);
+
   return res.status(200).json({
     reply:
       lang === "ms"
-        ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        ? `Saya faham masalah berikut:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : lang === "zh"
+        ? `我理解的问题如下：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+        : lang === "ta"
+        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+        : `I understood the issue as:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
   });
 }
 
