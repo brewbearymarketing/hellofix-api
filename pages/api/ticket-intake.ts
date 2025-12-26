@@ -362,6 +362,40 @@ if (unitHit && commonHit) {
   }
 }
 
+         /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
+
     /* ================= GREETING ================= */
 if (session.state === "idle" && isPureGreeting(rawText)) {
   await supabase
@@ -411,41 +445,6 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
 
   return isGreetingWord && !hasMaintenanceSignal;
 }
-
-         /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
-}
-
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
     if (!session.language) {
