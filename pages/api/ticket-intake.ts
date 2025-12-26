@@ -48,10 +48,6 @@ function keywordMatch(text: string, keywords: string[]) {
 
 /* ================= HELPERS (MOVED OUTSIDE HANDLER) ================= */
 /* ================= GREETING DETECTOR ================= */
-function debugLang(label: string, data: any) {
-  console.log(`🌐 LANG DEBUG [${label}]`, JSON.stringify(data, null, 2));
-}
-
 /* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
 function stripWhatsAppNoise(text: string): string {
   return text
@@ -435,12 +431,6 @@ const detectedLang = detectLanguage(rawForLang);
       session = data;
     }
 
-  debugLang("session_loaded", {
-  state: session.state,
-  language: session.language
-});
-
-
         /* ================= GREETING ================= */
 
 if (session.state === "idle" && isPureGreeting(rawText)) {
@@ -452,12 +442,6 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
       updated_at: new Date().toISOString()
     })
     .eq("id", session.id);
-
-debugLang("replying_with", {
-  sessionState: session.state,
-  finalLang: lang,
-  displayText
-});
 
   return res.status(200).json({
     reply: AUTO_REPLIES.greeting[detectedLang]
@@ -565,12 +549,6 @@ const displayText =
     ? description_clean
     : await translateForResident(description_clean, detectedLang);
 
-debugLang("replying_with", {
-  sessionState: session.state,
-  finalLang: lang,
-  displayText
-});
-
   return res.status(200).json({
     reply:
       lang === "ms"
@@ -611,12 +589,6 @@ const displayText =
   detectedLang === "en"
     ? description_clean
     : await translateForResident(description_clean, detectedLang);
-
-debugLang("replying_with", {
-  sessionState: session.state,
-  finalLang: lang,
-  displayText
-});
 
   return res.status(200).json({
     reply:
@@ -667,12 +639,6 @@ if (session.state === "drafting" && rawText === "1") {
       updated_at: new Date().toISOString()
     })
     .eq("id", session.id);
-
-debugLang("replying_with", {
-  sessionState: session.state,
-  finalLang: lang,
-  displayText
-});
 
   return res.status(200).json({
     reply: AUTO_REPLIES.ticketCreated[lang],
@@ -730,12 +696,6 @@ debugLang("replying_with", {
           .eq("id", ticket.id);
       }
     }
-
-debugLang("replying_with", {
-  sessionState: session.state,
-  finalLang: lang,
-  displayText
-});
 
     return res.status(200).json({
       reply: duplicate_of
