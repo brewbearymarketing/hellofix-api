@@ -118,7 +118,7 @@ Examples:
 }
 
 /* ================= LANGUAGE DETECTOR ================= */
-function detectLanguage(text: string): "en" | "ms" | "zh" | "hi" {
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   if (!text) return "en";
 
   const t = text.toLowerCase().trim();
