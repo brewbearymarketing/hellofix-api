@@ -376,6 +376,7 @@ const detectedLang = detectLanguage(rawForLang);
 }
 
         /* ================= GREETING ================= */
+function isPureGreeting(text: string): boolean {
 if (session.state === "idle" && isPureGreeting(rawText)) {
   await supabase
     .from("conversation_sessions")
@@ -423,6 +424,7 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
     t.includes("broken");
 
   return isGreetingWord && !hasMaintenanceSignal;
+}
 }
 
 /* ================= GREETING GUARD ================= */
@@ -487,7 +489,7 @@ if (unitHit && commonHit) {
 }
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    if (!session.language) {
+    if (!session.language && session.state === "idle") {
       await supabase
         .from("conversation_sessions")
         .update({ language: detectedLang })
@@ -498,9 +500,6 @@ if (unitHit && commonHit) {
 
     const lang =
   (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
-
-    reply: AUTO_REPLIES.ticketCreated[lang]
-    reply: AUTO_REPLIES.duplicateNotice[lang]
 
     /* ================= START DRAFT ================= */
 if (session.state === "greeted") {
@@ -605,7 +604,7 @@ if (session.state === "drafting" && rawText === "1") {
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
-    if (openai && description_raw) {
+    if (ticket && openai && description_raw) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_raw
