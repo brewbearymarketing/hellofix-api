@@ -324,6 +324,41 @@ const detectedLang = detectLanguage(rawForLang);
 
     const unit_id = resident.unit_id;
 
+       /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
+ 
+
 /* ===== INTENT DETECTION (FIXED) ===== */
 let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
 let intent_source: "keyword" | "ai" | "none" = "none";
@@ -360,40 +395,6 @@ if (unitHit && commonHit) {
     intent_confidence = ai.confidence;
     intent_source = "ai";
   }
-}
-
-         /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
 }
 
     /* ================= GREETING ================= */
@@ -509,10 +510,12 @@ if (session.state === "drafting" && rawText !== "1") {
 }
 
     /* ================= CONFIRM & CREATE TICKET ================= */
+let ticket: any = null;
+
 if (session.state === "drafting" && rawText === "1") {
   const finalDescription = session.draft_description;
 
-  const { data: ticket, error } = await supabase
+  const { data, error } = await supabase
     .from("tickets")
     .insert({
       condo_id,
@@ -530,7 +533,9 @@ if (session.state === "drafting" && rawText === "1") {
     .select()
     .single();
 
-  if (error) throw error;
+  if (error || !data) throw error;
+
+  ticket = data; // ✅ assign to outer variable
 
   await supabase
     .from("conversation_sessions")
