@@ -376,7 +376,7 @@ const detectedLang = detectLanguage(rawForLang);
 }
 
         /* ================= GREETING ================= */
-function isPureGreeting(text: string): boolean {
+
 if (session.state === "idle" && isPureGreeting(rawText)) {
   await supabase
     .from("conversation_sessions")
@@ -391,6 +391,8 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
     reply: AUTO_REPLIES.greeting[detectedLang]
   });
 }
+
+/* ================= GREETING DETECTOR ================= */
     
     function isPureGreeting(text: string): boolean {
   if (!text) return true;
@@ -424,7 +426,6 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
     t.includes("broken");
 
   return isGreetingWord && !hasMaintenanceSignal;
-}
 }
 
 /* ================= GREETING GUARD ================= */
