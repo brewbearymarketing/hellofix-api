@@ -517,7 +517,7 @@ if (session.state === "greeted") {
     .from("conversation_sessions")
     .update({
       state: "drafting",
-      draft_description: description_clean, // ✅ ALWAYS ENGLISH
+      draft_description: description_clean, // ✅ ALWAYS ENGLISH (DO NOT CHANGE)
       updated_at: new Date().toISOString()
     })
     .eq("id", session.id);
@@ -539,30 +539,44 @@ if (session.state === "greeted") {
   });
 }
 
-    /* ================= EDIT DRAFT ================= */
+/* ================= EDIT DRAFT (ASK TO RETYPE) ================= */
 if (session.state === "drafting" && rawText === "2") {
   return res.status(200).json({
     reply:
       lang === "ms"
         ? "Baik 👍 Sila taip semula masalah anda."
+        : lang === "zh"
+        ? "好的 👍 请重新输入您的问题。"
+        : lang === "ta"
+        ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
         : "Okay 👍 Please retype your issue."
   });
 }
 
+/* ================= EDIT DRAFT (UPDATE CONTENT) ================= */
 if (session.state === "drafting" && rawText !== "1") {
   await supabase
     .from("conversation_sessions")
     .update({
-      draft_description: description_clean,
+      draft_description: description_clean, // ✅ STILL ENGLISH ONLY
       updated_at: new Date().toISOString()
     })
     .eq("id", session.id);
 
+  const displayText =
+    lang === "en"
+      ? description_clean
+      : await translateForResident(description_clean, lang);
+
   return res.status(200).json({
     reply:
       lang === "ms"
-        ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        ? `Kemaskini draf:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : lang === "zh"
+        ? `已更新草稿：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+        : lang === "ta"
+        ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+        : `Updated draft:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
   });
 }
 
