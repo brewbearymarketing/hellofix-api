@@ -315,42 +315,6 @@ if (unitHit && commonHit) {
   }
 }
 
-
-    /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
-}
-
-
     /* ================= GREETING ================= */
 if (isPureGreeting(body.description_raw || "")) {
 
@@ -418,6 +382,39 @@ if (isPureGreeting(body.description_raw || "")) {
     reply: AUTO_REPLIES.ticketCreated[lang]
     reply: AUTO_REPLIES.duplicateNotice[lang]
 
+        /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
 
     /* ================= CREATE TICKET ================= */
     const { data: ticket, error } = await supabase
