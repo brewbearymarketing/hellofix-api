@@ -184,6 +184,40 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   return "en";
 }
 
+ /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
+
     /* ================= GREETING ================= */
 if (session.state === "idle" && isPureGreeting(rawText)) {
   await supabase
@@ -373,41 +407,6 @@ const detectedLang = detectLanguage(rawForLang);
     }
 
     const unit_id = resident.unit_id;
-
-       /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
-}
- 
 
 /* ===== INTENT DETECTION (FIXED) ===== */
 let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
