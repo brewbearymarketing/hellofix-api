@@ -511,6 +511,23 @@ if (unitHit && commonHit) {
     const lang =
   (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
 
+  // 🔑 Override language on first meaningful message
+if (
+  session.state === "greeted" &&
+  session.language &&
+  !isPureGreeting(rawText)
+) {
+  // detect language again using meaningful content
+  const confirmedLang = detectLanguage(rawText);
+
+  if (confirmedLang !== session.language) {
+    await updateSession(session.id, {
+      language: confirmedLang
+    });
+    session.language = confirmedLang;
+  }
+}
+
     /* ================= START DRAFT ================= */
 if (session.state === "greeted") {
   await supabase
