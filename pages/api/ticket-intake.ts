@@ -194,6 +194,28 @@ function stripWhatsAppNoise(text: string): string {
     .toLowerCase();
 }
 
+/* ================= AUTO REPLIES ================= */
+const AUTO_REPLIES = {
+  greeting: {
+    en: "Hi 👋 Please describe the issue you are facing.",
+    ms: "Hai 👋 Sila terangkan masalah yang anda hadapi.",
+    zh: "你好 👋 请描述您遇到的问题。",
+    ta: "வணக்கம் 👋 நீங்கள் எதிர்கொள்ளும் பிரச்சினையை விவரிக்கவும்."
+  },
+  ticketCreated: {
+    en: "✅ Your issue has been reported. We will assign a contractor shortly.",
+    ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
+    zh: "✅ 您的问题已记录。",
+    ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
+  },
+  duplicateNotice: {
+    en: "⚠️ A similar issue was reported earlier. We’ve linked your report.",
+    ms: "⚠️ Isu serupa telah dilaporkan sebelum ini.",
+    zh: "⚠️ 检测到类似问题，已为您关联。",
+    ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
+  }
+};
+
     /* ================= GREETING ================= */
 if (session.state === "idle" && isPureGreeting(rawText)) {
   await supabase
@@ -244,28 +266,6 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
   return isGreetingWord && !hasMaintenanceSignal;
 }
 
-/* ================= AUTO REPLIES ================= */
-const AUTO_REPLIES = {
-  greeting: {
-    en: "Hi 👋 Please describe the issue you are facing.",
-    ms: "Hai 👋 Sila terangkan masalah yang anda hadapi.",
-    zh: "你好 👋 请描述您遇到的问题。",
-    ta: "வணக்கம் 👋 நீங்கள் எதிர்கொள்ளும் பிரச்சினையை விவரிக்கவும்."
-  },
-  ticketCreated: {
-    en: "✅ Your issue has been reported. We will assign a contractor shortly.",
-    ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
-    zh: "✅ 您的问题已记录。",
-    ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
-  },
-  duplicateNotice: {
-    en: "⚠️ A similar issue was reported earlier. We’ve linked your report.",
-    ms: "⚠️ Isu serupa telah dilaporkan sebelum ini.",
-    zh: "⚠️ 检测到类似问题，已为您关联。",
-    ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
-  }
-};
-
 /* ================= VOICE ================= */
 async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   if (!openai) return null;
@@ -293,6 +293,31 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/* ================= CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+  let t = text.toLowerCase();
+  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= NORMALIZER ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text: string = body.description_raw || "";
+
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  if (!text && body.image_url) {
+    text = "Photo evidence provided.";
+  }
+
+  return cleanTranscript(text);
 }
 
 /* ================= API HANDLER ================= */
@@ -365,31 +390,6 @@ function isGreetingOnly(text: string): boolean {
   if (!text) return true;
   const t = text.toLowerCase().trim();
   return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
-}
-
-/* ================= CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
-  let t = text.toLowerCase();
-  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
-  t = t.replace(/\s+/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-/* ================= NORMALIZER ================= */
-async function normalizeIncomingMessage(body: any): Promise<string> {
-  let text: string = body.description_raw || "";
-
-  if (!text && body.voice_url) {
-    const transcript = await transcribeVoice(body.voice_url);
-    if (transcript) text = transcript;
-  }
-
-  if (!text && body.image_url) {
-    text = "Photo evidence provided.";
-  }
-
-  return cleanTranscript(text);
 }
 
      /* ===== VERIFY RESIDENT ===== */
