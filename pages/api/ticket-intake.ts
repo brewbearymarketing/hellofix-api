@@ -278,6 +278,9 @@ export default async function handler(
     const unit_id = resident.unit_id;
 
 /* ===== INTENT DETECTION (FIXED) ===== */
+let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+let intent_source: "keyword" | "ai" | "none" = "none";
+let intent_confidence = 1;
 const textForIntent = description_clean.toLowerCase();
 
 const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
