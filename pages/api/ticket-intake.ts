@@ -522,10 +522,10 @@ if (session.state === "greeted") {
     })
     .eq("id", session.id);
 
-  const displayText =
-    lang === "en"
-      ? description_clean
-      : await translateForResident(description_clean, lang);
+const displayText =
+  detectedLang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, detectedLang);
 
   return res.status(200).json({
     reply:
@@ -563,10 +563,10 @@ if (session.state === "drafting" && rawText !== "1") {
     })
     .eq("id", session.id);
 
-  const displayText =
-    lang === "en"
-      ? description_clean
-      : await translateForResident(description_clean, lang);
+const displayText =
+  detectedLang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, detectedLang);
 
   return res.status(200).json({
     reply:
