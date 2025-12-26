@@ -397,8 +397,8 @@ const rawText =
     ? description_raw
     : "";
 
-const rawForLang = stripWhatsAppNoise(rawText);
-const detectedLang = detectLanguage(rawForLang);
+const detectedLang = detectLanguage(rawText);
+
 
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
