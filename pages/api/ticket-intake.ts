@@ -184,38 +184,14 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   return "en";
 }
 
- /* ================= SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
-    
-    async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
+/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
+function stripWhatsAppNoise(text: string): string {
+  return text
+    .replace(/[0-9️⃣•\-–—]/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
     /* ================= GREETING ================= */
@@ -268,16 +244,6 @@ if (session.state === "idle" && isPureGreeting(rawText)) {
   return isGreetingWord && !hasMaintenanceSignal;
 }
 
-/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
-function stripWhatsAppNoise(text: string): string {
-  return text
-    .replace(/[0-9️⃣•\-–—]/g, " ")
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
 /* ================= AUTO REPLIES ================= */
 const AUTO_REPLIES = {
   greeting: {
@@ -299,22 +265,6 @@ const AUTO_REPLIES = {
     ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
   }
 };
-
-/* ================= GREETING GUARD ================= */
-function isGreetingOnly(text: string): boolean {
-  if (!text) return true;
-  const t = text.toLowerCase().trim();
-  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
-}
-
-/* ================= CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
-  let t = text.toLowerCase();
-  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
-  t = t.replace(/\s+/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
 
 /* ================= VOICE ================= */
 async function transcribeVoice(mediaUrl: string): Promise<string | null> {
@@ -343,22 +293,6 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/* ================= NORMALIZER ================= */
-async function normalizeIncomingMessage(body: any): Promise<string> {
-  let text: string = body.description_raw || "";
-
-  if (!text && body.voice_url) {
-    const transcript = await transcribeVoice(body.voice_url);
-    if (transcript) text = transcript;
-  }
-
-  if (!text && body.image_url) {
-    text = "Photo evidence provided.";
-  }
-
-  return cleanTranscript(text);
 }
 
 /* ================= API HANDLER ================= */
@@ -391,6 +325,72 @@ const detectedLang = detectLanguage(rawForLang);
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+ /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      ...fields,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", sessionId);
+}
+
+/* ================= GREETING GUARD ================= */
+function isGreetingOnly(text: string): boolean {
+  if (!text) return true;
+  const t = text.toLowerCase().trim();
+  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
+}
+
+/* ================= CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+  let t = text.toLowerCase();
+  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= NORMALIZER ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text: string = body.description_raw || "";
+
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  if (!text && body.image_url) {
+    text = "Photo evidence provided.";
+  }
+
+  return cleanTranscript(text);
+}
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
