@@ -13,6 +13,10 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+/* ================= TYPES ================= */
+
+type Lang = "en" | "ms" | "zh" | "ta";
+
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -359,7 +363,16 @@ if (unitHit && commonHit) {
 }
 
     /* ================= GREETING ================= */
-if (isPureGreeting(rawText)) {
+if (session.state === "idle" && isPureGreeting(rawText)) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "greeted",
+      language: detectedLang,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
   return res.status(200).json({
     reply: AUTO_REPLIES.greeting[detectedLang]
   });
@@ -450,26 +463,91 @@ if (isPureGreeting(rawText)) {
     reply: AUTO_REPLIES.ticketCreated[lang]
     reply: AUTO_REPLIES.duplicateNotice[lang]
 
-    /* ================= CREATE TICKET ================= */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
-      })
-      .select()
-      .single();
+    /* ================= START DRAFT ================= */
+if (session.state === "greeted") {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "drafting",
+      draft_description: description_clean,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
 
-    if (error || !ticket) throw error;
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+  });
+}
+
+    /* ================= EDIT DRAFT ================= */
+if (session.state === "drafting" && rawText === "2") {
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? "Baik 👍 Sila taip semula masalah anda."
+        : "Okay 👍 Please retype your issue."
+  });
+}
+
+if (session.state === "drafting" && rawText !== "1") {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      draft_description: description_clean,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+  });
+}
+
+    /* ================= CONFIRM & CREATE TICKET ================= */
+if (session.state === "drafting" && rawText === "1") {
+  const finalDescription = session.draft_description;
+
+  const { data: ticket, error } = await supabase
+    .from("tickets")
+    .insert({
+      condo_id,
+      unit_id: intent_category === "unit" ? unit_id : null,
+      description_raw: finalDescription,
+      description_clean: finalDescription,
+      source: "whatsapp",
+      status: "new",
+      is_common_area: intent_category === "common_area",
+      intent_category,
+      intent_source,
+      intent_confidence,
+      diagnosis_fee: intent_category === "unit" ? 30 : 0
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "ticket_created",
+      current_ticket_id: ticket.id,
+      draft_description: null,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    reply: AUTO_REPLIES.ticketCreated[lang],
+    ticket_id: ticket.id
+  });
+}
 
     /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
