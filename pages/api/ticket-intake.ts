@@ -118,12 +118,52 @@ Examples:
 }
 
 /* ================= LANGUAGE DETECTOR ================= */
-function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+function detectLanguage(text: string): "en" | "ms" | "zh" | "hi" {
   if (!text) return "en";
-  if (/[一-龥]/.test(text)) return "zh";
-  if (/[அ-ஹ]/.test(text)) return "ta";
 
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().trim();
+
+  /* ========= SCRIPT-BASED (MOST RELIABLE) ========= */
+
+  // Mandarin (Chinese)
+  if (/[\u4e00-\u9fff]/.test(text)) return "zh";
+
+  // Hindi (Devanagari)
+  if (/[\u0900-\u097F]/.test(text)) return "hi";
+
+  /* ========= GREETING-BASED ========= */
+
+  // Malay greetings
+  if (
+    t === "hai" ||
+    t === "salam" ||
+    t === "assalamualaikum" ||
+    t === "assalamu alaikum"
+  ) {
+    return "ms";
+  }
+
+  // Mandarin greetings (romanized + native)
+  if (
+    t === "ni hao" ||
+    t === "你好" ||
+    t === "您好"
+  ) {
+    return "zh";
+  }
+
+  // Hindi greetings
+  if (
+    t === "namaste" ||
+    t === "namaskar" ||
+    t === "नमस्ते"
+  ) {
+    return "hi";
+  }
+
+  /* ========= CONTENT-BASED ========= */
+
+  // Malay keywords
   if (
     t.includes("bocor") ||
     t.includes("rosak") ||
@@ -132,8 +172,11 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
     t.includes("tak") ||
     t.includes("nak") ||
     t.includes("tolong")
-  ) return "ms";
+  ) {
+    return "ms";
+  }
 
+  // Default → English
   return "en";
 }
 
