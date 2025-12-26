@@ -356,24 +356,7 @@ if (isPureGreeting(rawText)) {
   return isGreetingWord && !hasMaintenanceSignal;
 }
 
-
-    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    if (!session.language) {
-      await supabase
-        .from("conversation_sessions")
-        .update({ language: detectedLang })
-        .eq("id", session.id);
-
-      session.language = detectedLang;
-    }
-
-    const lang =
-  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
-
-    reply: AUTO_REPLIES.ticketCreated[lang]
-    reply: AUTO_REPLIES.duplicateNotice[lang]
-
-        /* ================= SESSION ================= */
+         /* ================= SESSION ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -406,6 +389,23 @@ if (isPureGreeting(rawText)) {
     })
     .eq("id", sessionId);
 }
+
+
+    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
+    if (!session.language) {
+      await supabase
+        .from("conversation_sessions")
+        .update({ language: detectedLang })
+        .eq("id", session.id);
+
+      session.language = detectedLang;
+    }
+
+    const lang =
+  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+
+    reply: AUTO_REPLIES.ticketCreated[lang]
+    reply: AUTO_REPLIES.duplicateNotice[lang]
 
     /* ================= CREATE TICKET ================= */
     const { data: ticket, error } = await supabase
