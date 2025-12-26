@@ -277,32 +277,40 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
+/* ===== INTENT DETECTION (FIXED) ===== */
+let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+let intent_source: "keyword" | "ai" | "none" = "none";
+let intent_confidence = 1;
 
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+// 🔑 IMPORTANT: use CLEAN description
+const textForIntent = description_clean.toLowerCase();
 
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
+const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
+const unitHit = keywordMatch(textForIntent, OWN_UNIT_KEYWORDS);
+const ambiguousHit = keywordMatch(textForIntent, AMBIGUOUS_KEYWORDS);
+
+// ✅ RULE PRIORITY
+if (unitHit && commonHit) {
+  intent_category = "mixed";
+  intent_source = "keyword";
+
+} else if (unitHit) {
+  // 🔥 unit overrides ambiguity
+  intent_category = "unit";
+  intent_source = "keyword";
+
+} else if (commonHit) {
+  intent_category = "common_area";
+  intent_source = "keyword";
+
+} else {
+  const ai = await aiClassify(description_clean);
+  if (ai.confidence >= 0.7) {
+    intent_category = ai.category;
+    intent_confidence = ai.confidence;
+    intent_source = "ai";
+  }
+}
 
     /* ================= SESSION ================= */
     let { data: session } = await supabase
