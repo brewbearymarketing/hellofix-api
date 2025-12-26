@@ -129,7 +129,7 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "hi" {
   if (/[\u4e00-\u9fff]/.test(text)) return "zh";
 
   // Hindi (Devanagari)
-  if (/[\u0900-\u097F]/.test(text)) return "hi";
+  if (/[\u0900-\u097F]/.test(text)) return "ta";
 
   /* ========= GREETING-BASED ========= */
 
@@ -158,7 +158,7 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "hi" {
     t === "namaskar" ||
     t === "नमस्ते"
   ) {
-    return "hi";
+    return "ta";
   }
 
   /* ========= CONTENT-BASED ========= */
