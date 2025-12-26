@@ -104,19 +104,13 @@ function isGreetingOnly(text: string): boolean {
 }
 
 /* ================= UPDATE SESSION ================= */
-async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
+async function updateSession(sessionId: string, fields: Record<string, any>) {
   await supabase
+    
     .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
 
-}
+    .update({ ...fields, updated_at: new Date().toISOString() })
+  .eq("id", sessionId);
 
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
@@ -390,23 +384,7 @@ async function handler(
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-    // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
-const rawText =
-  typeof description_raw === "string"
-    ? description_raw
-    : "";
-
-const detectedLang = detectLanguage(rawText);
-
-
-    if (!condo_id || !phone_number) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    function debugLang(label: string, data: any) {
-  console.log(`🌐 LANG DEBUG [${label}]`, JSON.stringify(data, null, 2));
-}
-
+const rawForLang = stripWhatsAppNoise(description_raw);
 const detectedLang = detectLanguage(rawForLang);
 
 
@@ -433,21 +411,24 @@ const detectedLang = detectLanguage(rawForLang);
 
         /* ================= GREETING ================= */
 
-if (session.state === "idle" && isPureGreeting(rawText)) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "greeted",
-      language: detectedLang,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
+if (session.state === "idle" && isPureGreeting(description_raw)) {
+      await updateSession(session.id, {
+        state: "greeted",
+        language: detectedLang // 🔧 weak signal
+      });
 
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
-  
+      return res.json({ reply: "Hi 👋 Please describe your issue." });
+    }
+
+    /* 🔑 OVERRIDE LANGUAGE ON FIRST MEANINGFUL MESSAGE */
+    if (session.state === "greeted" && !isPureGreeting(description_raw)) {
+      if (session.language !== detectedLang) {
+        await updateSession(session.id, { language: detectedLang }); // 🔧 V7.1 FIX
+        session.language = detectedLang;
+      }
+    }
+
+    const lang: Lang = session.language || detectedLang; // 🔧 SINGLE SOURCE OF TRUTH 
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -544,10 +525,7 @@ if (session.state === "greeted") {
     })
     .eq("id", session.id);
 
-const displayText =
-  detectedLang === "en"
-    ? description_clean
-    : await translateForResident(description_clean, detectedLang);
+const displayText = await translateForResident(cleaned, lang); // 🔧 FIX
 
   return res.status(200).json({
     reply:
@@ -585,10 +563,7 @@ if (session.state === "drafting" && rawText !== "1") {
     })
     .eq("id", session.id);
 
-const displayText =
-  detectedLang === "en"
-    ? description_clean
-    : await translateForResident(description_clean, detectedLang);
+const displayText = await translateForResident(cleaned, lang); // 🔧 FIX
 
   return res.status(200).json({
     reply:
