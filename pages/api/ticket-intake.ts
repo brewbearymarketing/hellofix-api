@@ -249,13 +249,13 @@ export default async function handler(
     const description_clean = await aiCleanDescription(description_raw);
 
     // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
-    const rawForLang = stripWhatsAppNoise(
-      typeof body.description_raw === "string"
-        ? body.description_raw
-        : description_raw
-    );
+const rawText =
+  typeof body.description_raw === "string"
+    ? body.description_raw
+    : "";
 
-    const detectedLang = detectLanguage(rawForLang);
+const rawForLang = stripWhatsAppNoise(rawText);
+const detectedLang = detectLanguage(rawForLang);
 
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -412,7 +412,12 @@ if (isPureGreeting(body.description_raw || "")) {
       session.language = detectedLang;
     }
 
-    const lang = session.language as "en" | "ms" | "zh" | "ta";
+    const lang =
+  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+
+    reply: AUTO_REPLIES.ticketCreated[lang]
+    reply: AUTO_REPLIES.duplicateNotice[lang]
+
 
     /* ================= CREATE TICKET ================= */
     const { data: ticket, error } = await supabase
