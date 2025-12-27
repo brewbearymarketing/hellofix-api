@@ -387,7 +387,7 @@ console.log("🌐 LANG TRACE", {
   detectedLang
 });
 
- /* ================= SESSION ================= */
+ /* =================FETCH & CREATE SESSION ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -406,23 +406,22 @@ if (!session) {
     .select()
     .single();
 
-  if (error || !data) {
-    console.error("❌ SESSION INSERT FAILED", {
-      condo_id,
-      phone_number,
-      error
+if (error || !data) {
+    console.error("❌ Failed to create session", error);
+    return res.status(500).json({
+      error: "Session creation failed"
     });
-    return res.status(500).json({ error: "Session init failed" });
   }
 
   session = data;
 }
 
 if (!session || !session.id) {
-  console.error("❌ SESSION NULL AFTER INIT", session);
-  return res.status(500).json({ error: "Invalid session state" });
+  console.error("❌ Session invalid after init", session);
+  return res.status(500).json({
+    error: "Invalid session state"
+  });
 }
-
 
         /* ================= GREETING ================= */
 
