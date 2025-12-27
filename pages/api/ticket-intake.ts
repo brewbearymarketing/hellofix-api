@@ -385,7 +385,7 @@ async function handler(
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-// 🔑 single language signal (raw WhatsApp text, cleaned)
+// 🔑 single language signal (raw WhatsApp text, description_clean)
 const langSignal = stripWhatsAppNoise(description_raw);
 const detectedLang = detectLanguage(langSignal);
 
@@ -519,7 +519,7 @@ const displayText =
 }
 
 /* ================= EDIT DRAFT (ASK TO RETYPE) ================= */
-if (session.state === "drafting" && rawText === "2") {
+if (session.state === "drafting" && description_Raw === "2") {
 
 const displayText =
   lang === "en"
@@ -539,7 +539,7 @@ const displayText =
 }
 
 /* ================= EDIT DRAFT (UPDATE CONTENT) ================= */
-if (session.state === "drafting" && rawText !== "1") {
+if (session.state === "drafting" && description_Raw !== "1") {
   await supabase
     .from("conversation_sessions")
     .update({
@@ -568,7 +568,7 @@ const displayText =
     /* ================= CONFIRM & CREATE TICKET ================= */
 let ticket: any = null;
 
-if (session.state === "drafting" && rawText === "1") {
+if (session.state === "drafting" && description_Raw === "1") {
   const finalDescription = session.draft_description;
 
   const { data, error } = await supabase
