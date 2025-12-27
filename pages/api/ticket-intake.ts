@@ -3,6 +3,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
+
+/*==== FOR AUDIO UPLOAD TO OPENAI=======*/
 import { toFile } from "openai/uploads";
 
 /* ================= CLIENTS ================= */
@@ -15,7 +17,7 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-/* ================= KEYWORDS ================= */
+/* ================= KEYWORDS MATCH ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
   "garbage","trash","bin room","pool","gym",
@@ -44,7 +46,7 @@ function keywordMatch(text: string, keywords: string[]) {
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
 
-/* ================= AI CLASSIFIER ================= */
+/* ================= AI CLASSIFIER UNIT/COMMON/MIXED ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
   confidence: number;
@@ -78,7 +80,7 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
-/* ================= MALAYSIAN AI NORMALISER ================= */
+/* ================= MALAYSIAN AI NORMALISER / CLEANER FOR TEXT, AUDIO AND IMAGE AND DUPLICATE PRE REQUIREMENT ================= */
 async function aiCleanDescription(text: string): Promise<string> {
   if (!openai) return text;
 
@@ -130,10 +132,10 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   // Mandarin (Chinese)
   if (/[\u4e00-\u9fff]/.test(text)) return "zh";
 
-  // Hindi (Devanagari)
-  if (/[\u0900-\u097F]/.test(text)) return "ta";
+  // Tamil (Malaysia)
+  if (/[\u0B80-\u0BFF]/.test(text)) return "ta";
 
-  /* ========= GREETING-BASED ========= */
+  /* ========= GREETING-BASED (LESS RELIABLE) ========= */
 
   // Malay greetings
   if (
@@ -259,7 +261,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   }
 }
 
-/* ================= NORMALIZER ================= */
+/* ================= NORMALIZER FOR VOICE ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
 
@@ -275,6 +277,10 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
   return cleanTranscript(text);
 }
 
+
+/*======================ABOVE THIS LINE 🧰 Tools, rules, and helpers that wont auto executed==========*/
+
+/* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
@@ -285,123 +291,35 @@ export default async function handler(
   }
 
   try {
+    /* ======================================================
+       A. PARSE & NORMALIZE INPUT
+    ====================================================== */
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
 
-    const description_raw = await normalizeIncomingMessage(body);
-    const description_clean = await aiCleanDescription(description_raw);
-
-    // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
-const rawText =
-  typeof body.description_raw === "string"
-    ? body.description_raw
-    : "";
-
-const rawForLang = stripWhatsAppNoise(rawText);
-const detectedLang = detectLanguage(rawForLang);
-
     if (!condo_id || !phone_number) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-     /* ===== VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
+    const description_raw = await normalizeIncomingMessage(body);
+    const description_clean = await aiCleanDescription(description_raw);
 
-    if (!resident || !resident.approved) {
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
-    }
+    /* ======================================================
+       B. LANGUAGE DETECTION (RAW TEXT ONLY)
+    ====================================================== */
+    const rawText =
+      typeof body.description_raw === "string"
+        ? body.description_raw
+        : "";
 
-    const unit_id = resident.unit_id;
+    const rawForLang = stripWhatsAppNoise(rawText);
+    const detectedLang = detectLanguage(rawForLang);
 
-/* ===== INTENT DETECTION (FIXED) ===== */
-let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-let intent_source: "keyword" | "ai" | "none" = "none";
-let intent_confidence = 1;
-const textForIntent = description_clean.toLowerCase();
-
-const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
-const unitHit = keywordMatch(textForIntent, OWN_UNIT_KEYWORDS);
-const ambiguousHit = keywordMatch(textForIntent, AMBIGUOUS_KEYWORDS);
-
-// 🔑 RULE ORDER (IMPORTANT)
-if (unitHit && commonHit) {
-  intent_category = "mixed";
-  intent_source = "keyword";
-
-} else if (unitHit) {
-  // ✅ unit overrides ambiguous
-  intent_category = "unit";
-  intent_source = "keyword";
-
-} else if (commonHit) {
-  intent_category = "common_area";
-  intent_source = "keyword";
-
-} else if (ambiguousHit) {
-  // ✅ ambiguous defaults to UNIT
-  intent_category = "unit";
-  intent_source = "keyword";
-
-} else {
-  const ai = await aiClassify(description_clean);
-  if (ai.confidence >= 0.7) {
-    intent_category = ai.category;
-    intent_confidence = ai.confidence;
-    intent_source = "ai";
-  }
-}
-
-    /* ================= GREETING ================= */
-if (isPureGreeting(rawText)) {
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
-    
-    function isPureGreeting(text: string): boolean {
-  if (!text) return true;
-
-  const t = stripWhatsAppNoise(text);
-
-  // common greeting patterns
-  const greetingPatterns = [
-    /^hi+$/,
-    /^hello+$/,
-    /^hey+$/,
-    /^hai+$/,
-    /^helo+$/,
-    /^yo+$/,
-    /^salam$/,
-    /^ass?alamualaikum$/,
-    /^👋+$/,
-    /^wave$/,
-  ];
-
-  // if matches greeting pattern AND no maintenance keywords
-  const isGreetingWord = greetingPatterns.some(r => r.test(t));
-
-  const hasMaintenanceSignal =
-    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
-    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
-    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
-    t.includes("bocor") ||
-    t.includes("rosak") ||
-    t.includes("leak") ||
-    t.includes("broken");
-
-  return isGreetingWord && !hasMaintenanceSignal;
-}
-
-         /* ================= SESSION ================= */
+    /* ======================================================
+       C. FETCH OR CREATE SESSION
+    ====================================================== */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -419,123 +337,201 @@ if (isPureGreeting(rawText)) {
         })
         .select()
         .single();
+
       session = data;
     }
-    
+
+    if (!session || !session.id) {
+      return res.status(500).json({ error: "Invalid session" });
+    }
+
     async function updateSession(
-  sessionId: string,
-  fields: Record<string, any>
-) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      ...fields,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", sessionId);
-}
+      sessionId: string,
+      fields: Record<string, any>
+    ) {
+      await supabase
+        .from("conversation_sessions")
+        .update({
+          ...fields,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", sessionId);
+    }
 
+    /* ======================================================
+       D. GREETING ONLY → EARLY EXIT (NO INTENT, NO TICKET)
+    ====================================================== */
+    if (isPureGreeting(rawText)) {
+      // weak language signal → only save if empty
+      if (!session.language) {
+        await updateSession(session.id, { language: detectedLang });
+        session.language = detectedLang;
+      }
 
-    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-  const isGreeting = isPureGreeting(rawText);
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[detectedLang]
+      });
+    }
 
-  if (isGreeting && !session.language) {
-    // weak signal → greeting
-  await updateSession(session.id, { language: detectedLang });
-  session.language = detectedLang;
-  }
+    /* ======================================================
+       E. VERIFY RESIDENT (REAL MESSAGE ONLY)
+    ====================================================== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
 
-  if (!isGreeting && session.language !== detectedLang) {
-    // strong signal → real complaint overrides greeting
-  await updateSession(session.id, { language: detectedLang });
-  session.language = detectedLang;
-  }
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
 
+    const unit_id = resident.unit_id;
+
+    /* ======================================================
+       F. LANGUAGE OVERRIDE (REAL COMPLAINT > GREETING)
+    ====================================================== */
+    if (session.language !== detectedLang) {
+      await updateSession(session.id, { language: detectedLang });
+      session.language = detectedLang;
+    }
 
     const lang =
-  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+      (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
 
-    reply: AUTO_REPLIES.ticketCreated[lang]
-    reply: AUTO_REPLIES.duplicateNotice[lang]
+    /* ======================================================
+       G. INTENT DETECTION (SAFE TO RUN NOW)
+    ====================================================== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
 
-    /* ================= CREATE TICKET ================= */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
-      })
-      .select()
-      .single();
+    const textForIntent = description_clean.toLowerCase();
 
-    if (error || !ticket) throw error;
+    const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(textForIntent, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(textForIntent, AMBIGUOUS_KEYWORDS);
 
-    /* ================= DUPLICATE DETECTION ================= */
-    let duplicate_of: string | null = null;
-    let related_to: string | null = null;
-
-    if (openai && description_raw) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_raw
-      });
-
-      const embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: null,
-          ticket_is_common_area: false,
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
-
-      if (relation?.length) {
-        const r = relation[0];
-        duplicate_of =
-          r.relation_type === "hard_duplicate"
-            ? r.related_ticket_id
-            : null;
-        related_to =
-          r.relation_type === "related"
-            ? r.related_ticket_id
-            : null;
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: !!duplicate_of,
-            duplicate_of,
-            related_to
-          })
-          .eq("id", ticket.id);
+    if (unitHit && commonHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (unitHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else if (commonHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_clean);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
       }
     }
 
-    return res.status(200).json({
-      reply: duplicate_of
-        ? AUTO_REPLIES.duplicateNotice[lang]
-        : AUTO_REPLIES.ticketCreated[lang],
-      ticket_id: ticket.id
-    });
+    /* ======================================================
+       H. STATE MACHINE
+    ====================================================== */
+
+    /* ---- IDLE → DRAFT ---- */
+    if (session.state === "idle") {
+      await updateSession(session.id, {
+        state: "drafting",
+        draft_description: description_clean
+      });
+
+      const displayText =
+        lang === "en"
+          ? description_clean
+          : await translateForResident(description_clean, lang);
+
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? `Saya faham masalah berikut:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            : lang === "zh"
+            ? `我理解的问题如下：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            : lang === "ta"
+            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `I understood the issue as:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+      });
+    }
+
+    /* ---- EDIT ---- */
+    if (session.state === "drafting" && rawText === "2") {
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? "Baik 👍 Sila taip semula masalah anda."
+            : lang === "zh"
+            ? "好的 👍 请重新输入您的问题。"
+            : lang === "ta"
+            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
+            : "Okay 👍 Please retype your issue."
+      });
+    }
+
+    /* ---- CONFIRM ---- */
+    if (session.state === "drafting" && rawText === "1") {
+      const finalDescription = session.draft_description;
+
+      /* ======================================================
+         I. CREATE TICKET (ONLY HERE)
+      ====================================================== */
+      const { data: ticket, error } = await supabase
+        .from("tickets")
+        .insert({
+          condo_id,
+          unit_id: intent_category === "unit" ? unit_id : null,
+          description_raw: finalDescription,
+          description_clean: finalDescription,
+          source: "whatsapp",
+          status: "new",
+          is_common_area: intent_category === "common_area",
+          intent_category,
+          intent_source,
+          intent_confidence,
+          diagnosis_fee: intent_category === "unit" ? 30 : 0
+        })
+        .select()
+        .single();
+
+      if (error || !ticket) throw error;
+
+      /* ---- EMBEDDING ---- */
+      if (openai && finalDescription) {
+        const emb = await openai.embeddings.create({
+          model: "text-embedding-3-small",
+          input: finalDescription
+        });
+
+        await supabase
+          .from("tickets")
+          .update({ embedding: emb.data[0].embedding })
+          .eq("id", ticket.id);
+      }
+
+      await updateSession(session.id, {
+        state: "ticket_created",
+        current_ticket_id: ticket.id,
+        draft_description: null
+      });
+
+      return res.status(200).json({
+        reply: AUTO_REPLIES.ticketCreated[lang],
+        ticket_id: ticket.id
+      });
+    }
+
+    return res.status(200).json({ ok: true });
 
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
