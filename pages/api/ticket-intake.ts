@@ -519,7 +519,7 @@ const displayText =
 }
 
 /* ================= EDIT DRAFT (ASK TO RETYPE) ================= */
-if (session.state === "drafting" && description_Raw === "2") {
+if (session.state === "drafting" && description_raw === "2") {
 
 const displayText =
   lang === "en"
@@ -539,7 +539,7 @@ const displayText =
 }
 
 /* ================= EDIT DRAFT (UPDATE CONTENT) ================= */
-if (session.state === "drafting" && description_Raw !== "1") {
+if (session.state === "drafting" && description_raw !== "1") {
   await supabase
     .from("conversation_sessions")
     .update({
@@ -568,7 +568,7 @@ const displayText =
     /* ================= CONFIRM & CREATE TICKET ================= */
 let ticket: any = null;
 
-if (session.state === "drafting" && description_Raw === "1") {
+if (session.state === "drafting" && description_raw === "1") {
   const finalDescription = session.draft_description;
 
   const { data, error } = await supabase
