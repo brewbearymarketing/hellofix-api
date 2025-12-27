@@ -395,26 +395,34 @@ console.log("🌐 LANG TRACE", {
       .eq("phone_number", phone_number)
       .maybeSingle();
 
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-      session = data;
-    }
+if (!session) {
+  const { data, error } = await supabase
+    .from("conversation_sessions")
+    .insert({
+      condo_id,
+      phone_number,
+      state: "idle"
+    })
+    .select()
+    .single();
 
-    if (!session) {
-  console.error("❌ SESSION CREATION FAILED", {
-    condo_id,
-    phone_number
-  });
-  return res.status(500).json({ error: "Session init failed" });
+  if (error || !data) {
+    console.error("❌ SESSION INSERT FAILED", {
+      condo_id,
+      phone_number,
+      error
+    });
+    return res.status(500).json({ error: "Session init failed" });
+  }
+
+  session = data;
 }
+
+if (!session || !session.id) {
+  console.error("❌ SESSION NULL AFTER INIT", session);
+  return res.status(500).json({ error: "Invalid session state" });
+}
+
 
         /* ================= GREETING ================= */
 
