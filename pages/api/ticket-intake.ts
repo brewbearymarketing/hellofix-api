@@ -387,7 +387,15 @@ console.log("🌐 LANG TRACE", {
   detectedLang
 });
 
- /* =================FETCH & CREATE SESSION ================= */
+/* ================= FETCH SESSION ================= */
+let { data: session } = await supabase
+  .from("conversation_sessions")
+  .select("*")
+  .eq("condo_id", condo_id)
+  .eq("phone_number", phone_number)
+  .maybeSingle();
+
+/* ================= CREATE SESSION IF MISSING ================= */
 if (!session) {
   const { data, error } = await supabase
     .from("conversation_sessions")
@@ -399,29 +407,20 @@ if (!session) {
     .select()
     .single();
 
-if (error || !data) {
+  if (error || !data) {
     console.error("❌ Failed to create session", error);
-    return res.status(500).json({
-      error: "Session creation failed"
-    });
+    return res.status(500).json({ error: "Session creation failed" });
   }
 
   session = data;
 }
 
+/* ================= HARD GUARD ================= */
 if (!session || !session.id) {
   console.error("❌ Session invalid after init", session);
-  return res.status(500).json({
-    error: "Invalid session state"
-  });
+  return res.status(500).json({ error: "Invalid session state" });
 }
 
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
 
         /* ================= GREETING ================= */
 
