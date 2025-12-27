@@ -282,6 +282,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
+/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -291,9 +292,7 @@ export default async function handler(
   }
 
   try {
-    /* ======================================================
-       A. PARSE & NORMALIZE INPUT
-    ====================================================== */
+    /* ================= 0. PARSE ================= */
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
@@ -303,79 +302,24 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    /* ================= 1. RAW MESSAGE ================= */
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-    /* ======================================================
-       B. LANGUAGE DETECTION (RAW TEXT ONLY)
-    ====================================================== */
     const rawText =
-      typeof body.description_raw === "string"
-        ? body.description_raw
-        : "";
+      typeof body.description_raw === "string" ? body.description_raw : "";
 
-    const rawForLang = stripWhatsAppNoise(rawText);
-    const detectedLang = detectLanguage(rawForLang);
+    const stripped = stripWhatsAppNoise(rawText);
+    const detectedLang = detectLanguage(stripped);
 
-    /* ======================================================
-       C. FETCH OR CREATE SESSION
-    ====================================================== */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!session) {
-      const { data } = await supabase
-        .from("conversation_sessions")
-        .insert({
-          condo_id,
-          phone_number,
-          state: "idle"
-        })
-        .select()
-        .single();
-
-      session = data;
-    }
-
-    if (!session || !session.id) {
-      return res.status(500).json({ error: "Invalid session" });
-    }
-
-    async function updateSession(
-      sessionId: string,
-      fields: Record<string, any>
-    ) {
-      await supabase
-        .from("conversation_sessions")
-        .update({
-          ...fields,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", sessionId);
-    }
-
-    /* ======================================================
-       D. GREETING ONLY → EARLY EXIT (NO INTENT, NO TICKET)
-    ====================================================== */
+    /* ================= 2. GREETING HARD BLOCK (IDLE) ================= */
     if (isPureGreeting(rawText)) {
-      // weak language signal → only save if empty
-      if (!session.language) {
-        await updateSession(session.id, { language: detectedLang });
-        session.language = detectedLang;
-      }
-
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ======================================================
-       E. VERIFY RESIDENT (REAL MESSAGE ONLY)
-    ====================================================== */
+    /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -391,20 +335,61 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-    /* ======================================================
-       F. LANGUAGE OVERRIDE (REAL COMPLAINT > GREETING)
-    ====================================================== */
-    if (session.language !== detectedLang) {
-      await updateSession(session.id, { language: detectedLang });
+    /* ================= 4. FETCH OR CREATE SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle",
+          language: detectedLang
+        })
+        .select()
+        .single();
+
+      session = data;
+    }
+
+    if (!session || !session.id) {
+      throw new Error("Session invalid");
+    }
+
+    async function updateSession(
+      fields: Record<string, any>
+    ) {
+      await supabase
+        .from("conversation_sessions")
+        .update({
+          ...fields,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", session.id);
+    }
+
+    /* ================= 5. LANGUAGE LOCK LOGIC ================= */
+    const isGreeting = isPureGreeting(rawText);
+
+    if (isGreeting && !session.language) {
+      await updateSession({ language: detectedLang });
       session.language = detectedLang;
     }
 
-    const lang =
-      (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
+    if (!isGreeting && session.language !== detectedLang) {
+      await updateSession({ language: detectedLang });
+      session.language = detectedLang;
+    }
 
-    /* ======================================================
-       G. INTENT DETECTION (SAFE TO RUN NOW)
-    ====================================================== */
+    const lang = (session.language as Lang) || detectedLang;
+
+    /* ================= 6. INTENT DETECTION (CLARIFY) ================= */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
       "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
@@ -437,36 +422,29 @@ export default async function handler(
       }
     }
 
-    /* ======================================================
-       H. STATE MACHINE
-    ====================================================== */
-
-    /* ---- IDLE → DRAFT ---- */
-    if (session.state === "idle") {
-      await updateSession(session.id, {
-        state: "drafting",
+    /* ================= 7. CONFIRMATION GATE ================= */
+    if (session.state !== "confirm" && description_raw !== "1") {
+      await updateSession({
+        state: "confirm",
         draft_description: description_clean
       });
-
-      const displayText =
-        lang === "en"
-          ? description_clean
-          : await translateForResident(description_clean, lang);
 
       return res.status(200).json({
         reply:
           lang === "ms"
-            ? `Saya faham masalah berikut:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
             : lang === "zh"
-            ? `我理解的问题如下：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
             : lang === "ta"
-            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-            : `I understood the issue as:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
 
-    /* ---- EDIT ---- */
-    if (session.state === "drafting" && rawText === "2") {
+    /* ================= 8. USER EDIT ================= */
+    if (session.state === "confirm" && description_raw === "2") {
+      await updateSession({ state: "clarify" });
+
       return res.status(200).json({
         reply:
           lang === "ms"
@@ -479,59 +457,107 @@ export default async function handler(
       });
     }
 
-    /* ---- CONFIRM ---- */
-    if (session.state === "drafting" && rawText === "1") {
-      const finalDescription = session.draft_description;
+    /* ================= 9. EXECUTE (ONLY AFTER CONFIRM) ================= */
+   /* ================= EXECUTE (CONFIRM → CREATE TICKET) ================= */
+if (session.state === "confirm" && description_raw === "1") {
 
-      /* ======================================================
-         I. CREATE TICKET (ONLY HERE)
-      ====================================================== */
-      const { data: ticket, error } = await supabase
-        .from("tickets")
-        .insert({
-          condo_id,
-          unit_id: intent_category === "unit" ? unit_id : null,
-          description_raw: finalDescription,
-          description_clean: finalDescription,
-          source: "whatsapp",
-          status: "new",
-          is_common_area: intent_category === "common_area",
-          intent_category,
-          intent_source,
-          intent_confidence,
-          diagnosis_fee: intent_category === "unit" ? 30 : 0
-        })
-        .select()
-        .single();
+  /* ---------- 1️⃣ CREATE TICKET (IRREVERSIBLE) ---------- */
+  const { data: ticket, error } = await supabase
+    .from("tickets")
+    .insert({
+      condo_id,
+      unit_id: intent_category === "unit" ? unit_id : null,
+      description_raw,
+      description_clean,
+      source: "whatsapp",
+      status: "new",
+      is_common_area: intent_category === "common_area",
+      intent_category,
+      intent_source,
+      intent_confidence,
+      diagnosis_fee: intent_category === "unit" ? 30 : 0
+    })
+    .select()
+    .single();
 
-      if (error || !ticket) throw error;
+  if (error || !ticket) throw error;
 
-      /* ---- EMBEDDING ---- */
-      if (openai && finalDescription) {
-        const emb = await openai.embeddings.create({
-          model: "text-embedding-3-small",
-          input: finalDescription
-        });
+  /* ---------- 2️⃣ GENERATE EMBEDDING (AFTER TICKET EXISTS) ---------- */
+  let embedding: number[] | null = null;
 
-        await supabase
-          .from("tickets")
-          .update({ embedding: emb.data[0].embedding })
-          .eq("id", ticket.id);
+  if (openai) {
+    const emb = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: description_clean
+    });
+
+    embedding = emb.data[0].embedding;
+
+    await supabase
+      .from("tickets")
+      .update({ embedding })
+      .eq("id", ticket.id);
+  }
+
+  /* ---------- 3️⃣ DUPLICATE / RELATED CHECK ---------- */
+  let duplicate_of: string | null = null;
+  let related_to: string | null = null;
+
+  if (embedding) {
+    const { data: relation } = await supabase.rpc(
+      "detect_ticket_relation",
+      {
+        query_embedding: embedding,
+        condo_filter: condo_id,
+        ticket_unit_id: intent_category === "unit" ? unit_id : null,
+        ticket_is_common_area: intent_category === "common_area",
+        exclude_id: ticket.id,
+        similarity_threshold: 0.85
+      }
+    );
+
+    if (relation?.length) {
+      const r = relation[0];
+
+      if (r.relation_type === "hard_duplicate") {
+        duplicate_of = r.related_ticket_id;
       }
 
-      await updateSession(session.id, {
-        state: "ticket_created",
-        current_ticket_id: ticket.id,
-        draft_description: null
-      });
+      if (r.relation_type === "related") {
+        related_to = r.related_ticket_id;
+      }
 
-      return res.status(200).json({
-        reply: AUTO_REPLIES.ticketCreated[lang],
-        ticket_id: ticket.id
-      });
+      await supabase
+        .from("tickets")
+        .update({
+          is_duplicate: !!duplicate_of,
+          duplicate_of,
+          related_to
+        })
+        .eq("id", ticket.id);
     }
+  }
 
-    return res.status(200).json({ ok: true });
+  /* ---------- 4️⃣ FINALIZE SESSION ---------- */
+  await updateSession(session.id, {
+    state: "done",
+    current_ticket_id: ticket.id,
+    draft_description: null
+  });
+
+  /* ---------- 5️⃣ FINAL RESPONSE ---------- */
+  return res.status(200).json({
+    reply: duplicate_of
+      ? AUTO_REPLIES.duplicateNotice[lang]
+      : AUTO_REPLIES.ticketCreated[lang],
+    ticket_id: ticket.id
+  });
+}
+
+    /* ================= FALLBACK ================= */
+    return res.status(200).json({
+      reply: AUTO_REPLIES.greeting[lang]
+    });
 
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
