@@ -463,16 +463,19 @@ export default async function handler(
 
     /* ================= 9. EXECUTE (ONLY AFTER CONFIRM) ================= */
    /* ================= EXECUTE (CONFIRM → CREATE TICKET) ================= */
-if (session.state === "confirm" && description_raw === "1") {
+if (
+  session.state === "confirm" &&
+  description_raw === "1"
+) {
 
   /* ---------- 1️⃣ CREATE TICKET (IRREVERSIBLE) ---------- */
-  const { data: ticket, error } = await supabase
+const { data: ticket, error } = await supabase
     .from("tickets")
     .insert({
       condo_id,
       unit_id: intent_category === "unit" ? unit_id : null,
       description_raw,
-      description_clean,
+      description_clean: session.draft_description,
       source: "whatsapp",
       status: "new",
       is_common_area: intent_category === "common_area",
@@ -485,6 +488,18 @@ if (session.state === "confirm" && description_raw === "1") {
     .single();
 
   if (error || !ticket) throw error;
+
+  await updateSession({
+    state: "done",
+    current_ticket_id: ticket.id,
+    draft_description: null
+  });
+
+  return res.status(200).json({
+    reply: AUTO_REPLIES.ticketCreated[lang],
+    ticket_id: ticket.id
+  });
+}
 
   /* ---------- 2️⃣ GENERATE EMBEDDING (AFTER TICKET EXISTS) ---------- */
   let embedding: number[] | null = null;
