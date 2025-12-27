@@ -388,13 +388,6 @@ console.log("🌐 LANG TRACE", {
 });
 
  /* =================FETCH & CREATE SESSION ================= */
-    let { data: session } = await supabase
-      .from("conversation_sessions")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
 if (!session) {
   const { data, error } = await supabase
     .from("conversation_sessions")
@@ -422,6 +415,13 @@ if (!session || !session.id) {
     error: "Invalid session state"
   });
 }
+
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
 
         /* ================= GREETING ================= */
 
