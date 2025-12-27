@@ -1,3 +1,5 @@
+no voice (need to patch later) but language detect work, greeting hi blocked:
+
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
@@ -12,10 +14,6 @@ const supabase = createClient(
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-
-/* ================= TYPES ================= */
-
-type Lang = "en" | "ms" | "zh" | "ta";
 
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
@@ -45,64 +43,6 @@ function keywordMatch(text: string, keywords: string[]) {
   const t = text.toLowerCase();
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
-
-/* ================= HELPERS (MOVED OUTSIDE HANDLER) ================= */
-/* ================= GREETING DETECTOR ================= */
-/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
-function stripWhatsAppNoise(text: string): string {
-  return text
-
-    .replace(/[0-9️⃣•\-–—]/g, " ")
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function isPureGreeting(text: string): boolean {
-  if (!text) return true;
-  const t = stripWhatsAppNoise(text);
-
-  // common greeting patterns
-  const greetingPatterns = [
-
-    /^hi+$/,
-    /^hello+$/,
-    /^hey+$/,
-    /^hai+$/,
-    /^helo+$/,
-    /^yo+$/,
-    /^salam$/,
-    /^ass?alamualaikum$/,
-    /^👋+$/,
-    /^wave$/,
-    
-  ];
-
-  // if matches greeting pattern AND no maintenance keywords 
-  const isGreetingWord = greetingPatterns.some(r => r.test(t));
-
-  const hasMaintenanceSignal =
-
-    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
-    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
-    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
-    t.includes("bocor") ||
-    t.includes("rosak") ||
-    t.includes("leak") ||
-    t.includes("broken");
-
-  return isGreetingWord && !hasMaintenanceSignal;
-
-}
-
-/* ================= GREETING GUARD ================= */
-function isGreetingOnly(text: string): boolean {
-  if (!text) return true;
-  const t = text.toLowerCase().trim();
-  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
-}
-
 
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
@@ -242,44 +182,14 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   return "en";
 }
 
-/* ================= DISPLAY TRANSLATION (RESIDENT UX) ================= */
-async function translateForResident(
-  englishText: string,
-  lang: Lang
-): Promise<string> {
-  if (!openai) return englishText;
-  if (lang === "en") return englishText;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-Translate the maintenance sentence into the user's language.
-
-Rules:
-- Keep meaning EXACT.
-- Do NOT add details.
-- Do NOT remove details.
-- Short, natural, human.
-- No emojis.
-- Output ONLY the translated sentence.
-          `
-        },
-        {
-          role: "user",
-          content: \`Language: \${lang}\nText: \${englishText}\`
-        }
-      ]
-    });
-
-    return r.choices[0]?.message?.content?.trim() || englishText;
-  } catch {
-    return englishText;
-  }
+/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
+function stripWhatsAppNoise(text: string): string {
+  return text
+    .replace(/[0-9️⃣•\-–—]/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 /* ================= AUTO REPLIES ================= */
@@ -303,6 +213,22 @@ const AUTO_REPLIES = {
     ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
   }
 };
+
+/* ================= GREETING GUARD ================= */
+function isGreetingOnly(text: string): boolean {
+  if (!text) return true;
+  const t = text.toLowerCase().trim();
+  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
+}
+
+/* ================= CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+  let t = text.toLowerCase();
+  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 /* ================= VOICE ================= */
 async function transcribeVoice(mediaUrl: string): Promise<string | null> {
@@ -333,15 +259,6 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   }
 }
 
-/* ================= CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
-  let t = text.toLowerCase();
-  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
-  t = t.replace(/\s+/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
 /* ================= NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
@@ -359,7 +276,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 }
 
 /* ================= API HANDLER ================= */
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
@@ -376,85 +293,18 @@ async function handler(
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-// 🔑 single language signal (raw WhatsApp text, description_clean)
-const langSignal = stripWhatsAppNoise(description_raw);
-const detectedLang = detectLanguage(langSignal);
+    // ✅ CRITICAL FIX: detect language from RAW WhatsApp text
+const rawText =
+  typeof body.description_raw === "string"
+    ? body.description_raw
+    : "";
 
-console.log("🌐 LANG TRACE", {
-  raw: description_raw,
-  clean: description_clean,
-  stripped: stripWhatsAppNoise(description_raw),
-  detectedLang
-});
+const rawForLang = stripWhatsAppNoise(rawText);
+const detectedLang = detectLanguage(rawForLang);
 
-/* ================= FETCH SESSION ================= */
-let { data: session } = await supabase
-  .from("conversation_sessions")
-  .select("*")
-  .eq("condo_id", condo_id)
-  .eq("phone_number", phone_number)
-  .maybeSingle();
-
-/* ================= CREATE SESSION IF MISSING ================= */
-if (!session) {
-  const { data, error } = await supabase
-    .from("conversation_sessions")
-    .insert({
-      condo_id,
-      phone_number,
-      state: "idle"
-    })
-    .select()
-    .single();
-
-  if (error || !data) {
-    console.error("❌ Failed to create session", error);
-    return res.status(500).json({ error: "Session creation failed" });
-  }
-
-  session = data;
-}
-
-/* ================= HARD GUARD ================= */
-if (!session || !session.id) {
-  console.error("❌ Session invalid after init", session);
-  return res.status(500).json({ error: "Invalid session state" });
-}
-
-
-        /* ================= GREETING ================= */
-
-if (session.state === "idle" && isPureGreeting(description_raw)) {
-      await updateSession(session.id, {
-        state: "greeted",
-        language: detectedLang // 🔧 weak signal
-      });
-      
-      return res.json({
-  reply: AUTO_REPLIES.greeting[detectedLang]
-});
-
+    if (!condo_id || !phone_number) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
-
-/* 🔑 FIRST REAL COMPLAINT */
-if (session.state === "greeted" && !isPureGreeting(description_raw)) {
-  await updateSession(session.id, {
-    state: "understood",
-    language: detectedLang
-  });
-
-  session.state = "understood";
-  session.language = detectedLang;
-}
-
-
-   const isFirstComplaint =
-  session.state === "greeted" && !isPureGreeting(description_raw);
-
-const lang: Lang = isFirstComplaint
-  ? detectedLang       // 🔑 override greeting language
-  : session.language || detectedLang;
-
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -510,140 +360,124 @@ if (unitHit && commonHit) {
   }
 }
 
-    /* ================= START DRAFT ================= */
-if (session.state === "understood") {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "drafting",
-      draft_description: description_clean, // ✅ ALWAYS ENGLISH (DO NOT CHANGE)
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
-
-const displayText =
-  lang === "en"
-    ? description_clean
-    : await translateForResident(description_clean, lang);
-
+    /* ================= GREETING ================= */
+if (isPureGreeting(rawText)) {
   return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? `Saya faham masalah berikut:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : lang === "zh"
-        ? `我理解的问题如下：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-        : lang === "ta"
-        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-        : `I understood the issue as:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+    reply: AUTO_REPLIES.greeting[detectedLang]
   });
 }
-
-/* ================= EDIT DRAFT (ASK TO RETYPE) ================= */
-if (session.state === "drafting" && description_raw === "2") {
-
-const displayText =
-  lang === "en"
-    ? description_clean
-    : await translateForResident(description_clean, lang);
     
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? "Baik 👍 Sila taip semula masalah anda."
-        : lang === "zh"
-        ? "好的 👍 请重新输入您的问题。"
-        : lang === "ta"
-        ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
-        : "Okay 👍 Please retype your issue."
-  });
+    function isPureGreeting(text: string): boolean {
+  if (!text) return true;
+
+  const t = stripWhatsAppNoise(text);
+
+  // common greeting patterns
+  const greetingPatterns = [
+    /^hi+$/,
+    /^hello+$/,
+    /^hey+$/,
+    /^hai+$/,
+    /^helo+$/,
+    /^yo+$/,
+    /^salam$/,
+    /^ass?alamualaikum$/,
+    /^👋+$/,
+    /^wave$/,
+  ];
+
+  // if matches greeting pattern AND no maintenance keywords
+  const isGreetingWord = greetingPatterns.some(r => r.test(t));
+
+  const hasMaintenanceSignal =
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken");
+
+  return isGreetingWord && !hasMaintenanceSignal;
 }
 
-/* ================= EDIT DRAFT (UPDATE CONTENT) ================= */
-if (session.state === "drafting" && description_raw !== "1") {
+         /* ================= SESSION ================= */
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle"
+        })
+        .select()
+        .single();
+      session = data;
+    }
+    
+    async function updateSession(
+  sessionId: string,
+  fields: Record<string, any>
+) {
   await supabase
     .from("conversation_sessions")
     .update({
-      draft_description: description_clean, // ✅ STILL ENGLISH ONLY
+      ...fields,
       updated_at: new Date().toISOString()
     })
-    .eq("id", session.id);
-
-const displayText =
-  lang === "en"
-    ? description_clean
-    : await translateForResident(description_clean, lang);
-
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? `Kemaskini draf:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : lang === "zh"
-        ? `已更新草稿：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-        : lang === "ta"
-        ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-        : `Updated draft:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
-  });
+    .eq("id", sessionId);
 }
 
-/* ================= CONFIRM UNDERSTOOD ================= */
-if (session.state === "understood" && description_raw === "1") {
-  await updateSession(session.id, {
-    state: "drafting",
-    draft_description: description_clean
-  });
 
-  session.state = "drafting";
-}
+    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
+    if (!session.language) {
+      await supabase
+        .from("conversation_sessions")
+        .update({ language: detectedLang })
+        .eq("id", session.id);
 
-    /* ================= CONFIRM & CREATE TICKET ================= */
-let ticket: any = null;
+      session.language = detectedLang;
+    }
 
-if (session.state === "drafting" && description_raw === "1") {
-  const finalDescription = session.draft_description;
+    const lang =
+  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
 
-  const { data, error } = await supabase
-    .from("tickets")
-    .insert({
-      condo_id,
-      unit_id: intent_category === "unit" ? unit_id : null,
-      description_raw: finalDescription,
-      description_clean: finalDescription,
-      source: "whatsapp",
-      status: "new",
-      is_common_area: intent_category === "common_area",
-      intent_category,
-      intent_source,
-      intent_confidence,
-      diagnosis_fee: intent_category === "unit" ? 30 : 0
-    })
-    .select()
-    .single();
+    reply: AUTO_REPLIES.ticketCreated[lang]
+    reply: AUTO_REPLIES.duplicateNotice[lang]
 
-  if (error || !data) throw error;
+    /* ================= CREATE TICKET ================= */
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
+      })
+      .select()
+      .single();
 
-  ticket = data; // ✅ assign to outer variable
-
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "ticket_created",
-      current_ticket_id: ticket.id,
-      draft_description: null,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
-
-  return res.status(200).json({
-    reply: AUTO_REPLIES.ticketCreated[lang],
-    ticket_id: ticket.id
-  });
-}
+    if (error || !ticket) throw error;
 
     /* ================= DUPLICATE DETECTION ================= */
     let duplicate_of: string | null = null;
     let related_to: string | null = null;
 
-    if (ticket && openai && description_raw) {
+    if (openai && description_raw) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_raw
@@ -705,6 +539,3 @@ if (session.state === "drafting" && description_raw === "1") {
     });
   }
 }
-
-export default handler;
-
