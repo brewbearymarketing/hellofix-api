@@ -443,7 +443,13 @@ if (session.state === "greeted" && !isPureGreeting(description_raw)) {
 }
 
 
-    const lang: Lang = session.language || detectedLang;
+   const isFirstComplaint =
+  session.state === "greeted" && !isPureGreeting(description_raw);
+
+const lang: Lang = isFirstComplaint
+  ? detectedLang       // 🔑 override greeting language
+  : session.language || detectedLang;
+
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
