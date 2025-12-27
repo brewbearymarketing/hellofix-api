@@ -423,7 +423,11 @@ export default async function handler(
     }
 
     /* ================= 7. CONFIRMATION GATE ================= */
-    if (session.state !== "confirm" && description_raw !== "1") {
+    if (
+  session.state === "confirm" &&
+  description_raw === "1" &&
+  session.draft_description
+) {
       await updateSession({
         state: "confirm",
         draft_description: description_clean
