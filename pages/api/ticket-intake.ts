@@ -417,6 +417,14 @@ console.log("🌐 LANG TRACE", {
       session = data;
     }
 
+    if (!session) {
+  console.error("❌ SESSION CREATION FAILED", {
+    condo_id,
+    phone_number
+  });
+  return res.status(500).json({ error: "Session init failed" });
+}
+
         /* ================= GREETING ================= */
 
 if (session.state === "idle" && isPureGreeting(description_raw)) {
