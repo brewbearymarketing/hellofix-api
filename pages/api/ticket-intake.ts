@@ -103,15 +103,6 @@ function isGreetingOnly(text: string): boolean {
   return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
 }
 
-/* ================= UPDATE SESSION ================= */
-async function updateSession(sessionId: string, fields: Record<string, any>) {
-  await supabase
-    
-    .from("conversation_sessions")
-
-    .update({ ...fields, updated_at: new Date().toISOString() })
-  .eq("id", sessionId);
-}
 
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
