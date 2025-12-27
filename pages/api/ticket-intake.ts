@@ -111,6 +111,7 @@ async function updateSession(sessionId: string, fields: Record<string, any>) {
 
     .update({ ...fields, updated_at: new Date().toISOString() })
   .eq("id", sessionId);
+}
 
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
@@ -384,8 +385,10 @@ async function handler(
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-const rawForLang = stripWhatsAppNoise(description_raw);
-const detectedLang = detectLanguage(rawForLang);
+// 🔑 single language signal (raw WhatsApp text, cleaned)
+const langSignal = stripWhatsAppNoise(description_raw);
+const detectedLang = detectLanguage(langSignal);
+
 
 
  /* ================= SESSION ================= */
@@ -417,7 +420,10 @@ if (session.state === "idle" && isPureGreeting(description_raw)) {
         language: detectedLang // 🔧 weak signal
       });
 
-      return res.json({ reply: "Hi 👋 Please describe your issue." });
+      return res.json({
+  reply: AUTO_REPLIES.greeting[detectedLang]
+});
+
     }
 
     /* 🔑 OVERRIDE LANGUAGE ON FIRST MEANINGFUL MESSAGE */
@@ -484,36 +490,6 @@ if (unitHit && commonHit) {
   }
 }
 
-    /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    if (!session.language && session.state === "idle") {
-      await supabase
-        .from("conversation_sessions")
-        .update({ language: detectedLang })
-        .eq("id", session.id);
-
-      session.language = detectedLang;
-    }
-
-    const lang =
-  (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
-
-  // 🔑 Override language on first meaningful message
-if (
-  session.state === "greeted" &&
-  session.language &&
-  !isPureGreeting(rawText)
-) {
-  // detect language again using meaningful content
-  const confirmedLang = detectLanguage(rawText);
-
-  if (confirmedLang !== session.language) {
-    await updateSession(session.id, {
-      language: confirmedLang
-    });
-    session.language = confirmedLang;
-  }
-}
-
     /* ================= START DRAFT ================= */
 if (session.state === "greeted") {
   await supabase
@@ -525,7 +501,10 @@ if (session.state === "greeted") {
     })
     .eq("id", session.id);
 
-const displayText = await translateForResident(cleaned, lang); // 🔧 FIX
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
 
   return res.status(200).json({
     reply:
@@ -541,6 +520,12 @@ const displayText = await translateForResident(cleaned, lang); // 🔧 FIX
 
 /* ================= EDIT DRAFT (ASK TO RETYPE) ================= */
 if (session.state === "drafting" && rawText === "2") {
+
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
+    
   return res.status(200).json({
     reply:
       lang === "ms"
@@ -563,7 +548,10 @@ if (session.state === "drafting" && rawText !== "1") {
     })
     .eq("id", session.id);
 
-const displayText = await translateForResident(cleaned, lang); // 🔧 FIX
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
 
   return res.status(200).json({
     reply:
