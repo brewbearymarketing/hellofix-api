@@ -437,14 +437,20 @@ if (isPureGreeting(rawText)) {
 
 
     /* ================= LOCK LANGUAGE AFTER GREETING ================= */
-    if (!session.language) {
-      await supabase
-        .from("conversation_sessions")
-        .update({ language: detectedLang })
-        .eq("id", session.id);
+  const isGreeting = isPureGreeting(rawText);
 
-      session.language = detectedLang;
-    }
+  if (isGreeting && !session.language) {
+    // weak signal → greeting
+  await updateSession(session.id, { language: detectedLang });
+  session.language = detectedLang;
+  }
+
+  if (!isGreeting && session.language !== detectedLang) {
+    // strong signal → real complaint overrides greeting
+  await updateSession(session.id, { language: detectedLang });
+  session.language = detectedLang;
+  }
+
 
     const lang =
   (session.language as "en" | "ms" | "zh" | "ta") || detectedLang;
