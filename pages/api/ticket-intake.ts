@@ -389,7 +389,12 @@ async function handler(
 const langSignal = stripWhatsAppNoise(description_raw);
 const detectedLang = detectLanguage(langSignal);
 
-
+console.log("🌐 LANG TRACE", {
+  raw: description_raw,
+  clean: description_clean,
+  stripped: stripWhatsAppNoise(description_raw),
+  detectedLang
+});
 
  /* ================= SESSION ================= */
     let { data: session } = await supabase
