@@ -429,17 +429,7 @@ if (session.state === "idle" && isPureGreeting(description_raw)) {
         state: "greeted",
         language: detectedLang // 🔧 weak signal
       });
-/*===========BUG CHECK=========*/
-
-console.log("🧠 LANG DECISION", {
-  state: session.state,
-  greetingLang: session.language,
-  detectedLang,
-  finalLang: lang,
-  text: description_raw
-});
-
-/*=========================*/
+      
       return res.json({
   reply: AUTO_REPLIES.greeting[detectedLang]
 });
@@ -460,6 +450,15 @@ const lang: Lang = isFirstComplaint
   ? detectedLang       // 🔑 override greeting language
   : session.language || detectedLang;
 
+/*===========BUG CHECK=========*/
+
+console.log("🧠 LANG DECISION", {
+  state: session.state,
+  greetingLang: session.language,
+  detectedLang,
+  finalLang: lang,
+  text: description_raw
+});
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
