@@ -434,7 +434,7 @@ if (session.state === "idle" && isPureGreeting(description_raw)) {
       }
     }
 
-    const lang: Lang = session.language; // 🔧 SINGLE SOURCE OF TRUTH 
+    const lang: Lang = session.language || detectedLang;
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
