@@ -1,4 +1,4 @@
-no voice (need to patch later) but language detect work, greeting hi blocked:
+/*=====no voice (need to patch later) but language detect work, greeting hi blocked======*/
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
