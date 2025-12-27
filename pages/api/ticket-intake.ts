@@ -436,9 +436,14 @@ if (session.state === "idle" && isPureGreeting(description_raw)) {
 
     }
 
-/* 🔑 FIRST MEANINGFUL MESSAGE DECIDES LANGUAGE */
+/* 🔑 FIRST REAL COMPLAINT */
 if (session.state === "greeted" && !isPureGreeting(description_raw)) {
-  await updateSession(session.id, { language: detectedLang });
+  await updateSession(session.id, {
+    state: "understood",
+    language: detectedLang
+  });
+
+  session.state = "understood";
   session.language = detectedLang;
 }
 
@@ -450,15 +455,6 @@ const lang: Lang = isFirstComplaint
   ? detectedLang       // 🔑 override greeting language
   : session.language || detectedLang;
 
-/*===========BUG CHECK=========*/
-
-console.log("🧠 LANG DECISION", {
-  state: session.state,
-  greetingLang: session.language,
-  detectedLang,
-  finalLang: lang,
-  text: description_raw
-});
 
      /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -515,7 +511,7 @@ if (unitHit && commonHit) {
 }
 
     /* ================= START DRAFT ================= */
-if (session.state === "greeted") {
+if (session.state === "understood") {
   await supabase
     .from("conversation_sessions")
     .update({
@@ -587,6 +583,16 @@ const displayText =
         ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
         : `Updated draft:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
   });
+}
+
+/* ================= CONFIRM UNDERSTOOD ================= */
+if (session.state === "understood" && description_raw === "1") {
+  await updateSession(session.id, {
+    state: "drafting",
+    draft_description: description_clean
+  });
+
+  session.state = "drafting";
 }
 
     /* ================= CONFIRM & CREATE TICKET ================= */
