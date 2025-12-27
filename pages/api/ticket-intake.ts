@@ -426,13 +426,12 @@ if (session.state === "idle" && isPureGreeting(description_raw)) {
 
     }
 
-    /* 🔑 OVERRIDE LANGUAGE ON FIRST MEANINGFUL MESSAGE */
-    if (session.state === "greeted" && !isPureGreeting(description_raw)) {
-      if (session.language !== detectedLang) {
-        await updateSession(session.id, { language: detectedLang }); // 🔧 V7.1 FIX
-        session.language = detectedLang;
-      }
-    }
+/* 🔑 FIRST MEANINGFUL MESSAGE DECIDES LANGUAGE */
+if (session.state === "greeted" && !isPureGreeting(description_raw)) {
+  await updateSession(session.id, { language: detectedLang });
+  session.language = detectedLang;
+}
+
 
     const lang: Lang = session.language || detectedLang;
 
