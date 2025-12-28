@@ -300,6 +300,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 /*======================ABOVE THIS LINE 🧰 Tools, rules, and helpers that wont auto executed==========*/
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
+/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -321,17 +322,18 @@ export default async function handler(
 
     /* ================= 1. RAW MESSAGE ================= */
     const description_raw = await normalizeIncomingMessage(body);
+    const description_clean = await aiCleanDescription(description_raw);
+
     const rawText =
       typeof body.description_raw === "string" ? body.description_raw : "";
 
-    const strippedRaw = stripWhatsAppNoise(rawText);
+    const stripped = stripWhatsAppNoise(rawText);
+    const detectedLang = detectLanguage(stripped);
 
     /* ================= 2. STRICT GREETING / NOISE BLOCK ================= */
-    // No problem signal → NEVER advance state
-    if (!hasStrongProblemSignal(strippedRaw)) {
-      const lang = detectLanguage(strippedRaw);
+    if (!hasProblemSignal(rawText)) {
       return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[lang]
+        reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
@@ -366,7 +368,7 @@ export default async function handler(
           condo_id,
           phone_number,
           state: "idle",
-          language: detectLanguage(strippedRaw) // TEMP language
+          language: detectedLang
         })
         .select()
         .single();
@@ -374,9 +376,11 @@ export default async function handler(
       session = data;
     }
 
-    if (!session?.id) throw new Error("Session invalid");
+    if (!session || !session.id) {
+      throw new Error("Session invalid");
+    }
 
-    const updateSession = async (fields: Record<string, any>) => {
+    async function updateSession(fields: Record<string, any>) {
       await supabase
         .from("conversation_sessions")
         .update({
@@ -384,24 +388,17 @@ export default async function handler(
           updated_at: new Date().toISOString()
         })
         .eq("id", session.id);
-    };
+    }
 
-    /* ================= 5. FIRST MEANINGFUL COMPLAINT ================= */
-    // Language locked ONLY here
-    if (!session.language_locked) {
-      const detectedLang = detectLanguage(strippedRaw);
-      await updateSession({
-        language: detectedLang,
-        language_locked: true
-      });
+    /* ================= 5. LANGUAGE LOCK ================= */
+    if (!session.language) {
+      await updateSession({ language: detectedLang });
       session.language = detectedLang;
     }
 
-    const lang = session.language as Lang;
+    const lang = session.language as "en" | "ms" | "zh" | "ta";
 
-    /* ================= 6. CLEAN + INTENT ================= */
-    const description_clean = await aiCleanDescription(description_raw);
-
+    /* ================= 6. INTENT DETECTION ================= */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
       "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
@@ -409,8 +406,8 @@ export default async function handler(
 
     const t = description_clean.toLowerCase();
 
-    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
     const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
     const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
 
     if (unitHit && commonHit) {
@@ -434,7 +431,9 @@ export default async function handler(
       }
     }
 
-    /* ================= 7. CLARIFY → CONFIRM ================= */
+    /* =======================================================
+       7. CLARIFY → CONFIRM (BANK-GRADE GATE)
+       ======================================================= */
     if (session.state === "idle") {
       await updateSession({
         state: "confirm",
@@ -487,9 +486,18 @@ export default async function handler(
       });
     }
 
+    /* =======================================================
+       🔒 HARD EXECUTION BARRIER (THIS FIXES YOUR BUG)
+       ======================================================= */
+    if (session.state !== "confirm") {
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[lang]
+      });
+    }
+
     /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
-    if (session.state === "confirm" && description_raw === "1") {
-      // 🔐 Anti-replay
+    if (description_raw === "1") {
+      // 🛑 Anti-replay
       if (session.current_ticket_id) {
         return res.status(200).json({
           reply: AUTO_REPLIES.ticketCreated[lang],
@@ -497,6 +505,7 @@ export default async function handler(
         });
       }
 
+      /* ---------- CREATE TICKET ---------- */
       const { data: ticket, error } = await supabase
         .from("tickets")
         .insert({
@@ -517,48 +526,57 @@ export default async function handler(
 
       if (error || !ticket) throw error;
 
-      /* ===== EMBEDDING ===== */
-      const emb = await openai!.embeddings.create({
-        model: "text-embedding-3-small",
-        input: session.draft_description
-      });
+      /* ---------- EMBEDDING ---------- */
+      let embedding: number[] | null = null;
 
-      await supabase
-        .from("tickets")
-        .update({ embedding: emb.data[0].embedding })
-        .eq("id", ticket.id);
+      if (openai) {
+        const emb = await openai.embeddings.create({
+          model: "text-embedding-3-small",
+          input: session.draft_description
+        });
 
-      /* ===== DUPLICATE CHECK ===== */
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: emb.data[0].embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: unit_id,
-          ticket_is_common_area: intent_category === "common_area",
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
+        embedding = emb.data[0].embedding;
 
-      if (relation?.length) {
-        const r = relation[0];
         await supabase
           .from("tickets")
-          .update({
-            is_duplicate: r.relation_type === "hard_duplicate",
-            duplicate_of:
-              r.relation_type === "hard_duplicate"
-                ? r.related_ticket_id
-                : null,
-            related_to:
-              r.relation_type === "related"
-                ? r.related_ticket_id
-                : null
-          })
+          .update({ embedding })
           .eq("id", ticket.id);
       }
 
+      /* ---------- DUPLICATE CHECK ---------- */
+      if (embedding) {
+        const { data: relation } = await supabase.rpc(
+          "detect_ticket_relation",
+          {
+            query_embedding: embedding,
+            condo_filter: condo_id,
+            ticket_unit_id: intent_category === "unit" ? unit_id : null,
+            ticket_is_common_area: intent_category === "common_area",
+            exclude_id: ticket.id,
+            similarity_threshold: 0.85
+          }
+        );
+
+        if (relation?.length) {
+          const r = relation[0];
+          await supabase
+            .from("tickets")
+            .update({
+              is_duplicate: r.relation_type === "hard_duplicate",
+              duplicate_of:
+                r.relation_type === "hard_duplicate"
+                  ? r.related_ticket_id
+                  : null,
+              related_to:
+                r.relation_type === "related"
+                  ? r.related_ticket_id
+                  : null
+            })
+            .eq("id", ticket.id);
+        }
+      }
+
+      /* ---------- FINALIZE ---------- */
       await updateSession({
         state: "done",
         current_ticket_id: ticket.id,
@@ -566,10 +584,7 @@ export default async function handler(
       });
 
       return res.status(200).json({
-        reply:
-          relation?.[0]?.relation_type === "hard_duplicate"
-            ? AUTO_REPLIES.duplicateNotice[lang]
-            : AUTO_REPLIES.ticketCreated[lang],
+        reply: AUTO_REPLIES.ticketCreated[lang],
         ticket_id: ticket.id
       });
     }
@@ -587,3 +602,4 @@ export default async function handler(
     });
   }
 }
+
