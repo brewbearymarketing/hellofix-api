@@ -442,7 +442,7 @@ if (!hasProblemSignal(rawText)) {
     }
 
     /* =================7. START DRAFT ================= */
-if (session.state === "understood") {
+if (session.state === "idle") {
   await supabase
     .from("conversation_sessions")
     .update({
