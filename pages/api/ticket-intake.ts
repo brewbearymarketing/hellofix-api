@@ -367,18 +367,7 @@ export default async function handler(
         .eq("id", session.id);
     }
 
-/* ================= 3. GREETING / NOISE HARD BLOCK ================= */
-/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
-if (
-  session?.state === "idle" &&
-  !hasProblemSignal(rawText)
-) {
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
-
-    /* ================= 4. VERIFY RESIDENT ================= */
+       /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -393,6 +382,17 @@ if (
     }
 
     const unit_id = resident.unit_id;
+
+/* ================= 4. GREETING / NOISE HARD BLOCK ================= */
+/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
+if (
+  session?.state === "idle" &&
+  !hasProblemSignal(rawText)
+) {
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
@@ -457,7 +457,7 @@ if (
     }
 
     /* ================= 8. EDIT FLOW ================= */
-    if (session.state === "confirm" && description_raw === "2") {{
+    if (session.state === "confirm" && description_raw === "2") {
       await updateSession({ state: "editing" });
 
       return res.status(200).json({
@@ -489,10 +489,9 @@ if (
             : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
-    }
 
     /* =======================================================
-       🔒 HARD EXECUTION BARRIER (THIS FIXES YOUR BUG)
+       🔒 HARD EXECUTION BARRIER 
        ======================================================= */
     if (session.state !== "confirm") {
       return res.status(200).json({
@@ -501,14 +500,14 @@ if (
     }
 
     /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
-    if (description_raw === "1") {
+    if (description_raw === "1" && session.state === "confirm") {
       // 🛑 Anti-replay
-      if (session.current_ticket_id) {
+     
         return res.status(200).json({
           reply: AUTO_REPLIES.ticketCreated[lang],
           ticket_id: session.current_ticket_id
         });
-      }
+   
 
       /* ---------- CREATE TICKET ---------- */
       const { data: ticket, error } = await supabase
