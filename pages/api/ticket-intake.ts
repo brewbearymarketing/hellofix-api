@@ -422,38 +422,42 @@ export default async function handler(
       }
     }
 
-    /* ================= 7. CONFIRMATION GATE ================= */
-/*
-RULE:
-- Any NON "1" or "2" input enters confirmation
-- Ticket creation is BLOCKED here
-*/
+    /* =================7. START DRAFT ================= */
+if (session.state === "understood") {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "drafting",
+      draft_description: description_clean, // ✅ ALWAYS ENGLISH (DO NOT CHANGE)
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
 
-if (session.state !== "confirm" && description_raw !== "1" && description_raw !== "2") {
-  await updateSession({
-    state: "confirm",
-    draft_description: description_clean
-  });
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
 
   return res.status(200).json({
     reply:
       lang === "ms"
-        ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        ? `Saya faham masalah berikut:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
         : lang === "zh"
-        ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+        ? `我理解的问题如下：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
         : lang === "ta"
-        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-        : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+        : `I understood the issue as:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
   });
 }
 
     /* ================= 8. USER EDIT ================= */
-if (session.state === "confirm" && description_raw === "2") {
-  await updateSession({
-    state: "clarify",
-    draft_description: null
-  });
+if (session.state === "drafting" && description_raw === "2") {
 
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
+    
   return res.status(200).json({
     reply:
       lang === "ms"
@@ -466,19 +470,48 @@ if (session.state === "confirm" && description_raw === "2") {
   });
 }
 
+/* =================8.1 EDIT DRAFT (UPDATE CONTENT) ================= */
+if (session.state === "drafting" && description_raw !== "1") {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      draft_description: description_clean, // ✅ STILL ENGLISH ONLY
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
+
+const displayText =
+  lang === "en"
+    ? description_clean
+    : await translateForResident(description_clean, lang);
+
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? `Kemaskini draf:\n\n"${displayText}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : lang === "zh"
+        ? `已更新草稿：\n\n"${displayText}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+        : lang === "ta"
+        ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${displayText}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+        : `Updated draft:\n\n"${displayText}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+  });
+}
 
     /* ================= 9. EXECUTE (ONLY AFTER CONFIRM) ================= */
    /* ================= EXECUTE (CONFIRM → CREATE TICKET) ================= */
-if (session.state === "confirm" && description_raw === "1") {
+let ticket: any = null;
+
+if (session.state === "drafting" && description_raw === "1") {
+  const finalDescription = session.draft_description;
 
   /* ---------- 1️⃣ CREATE TICKET ---------- */
-  const { data: ticket, error } = await supabase
+  const { data, error } = await supabase
     .from("tickets")
     .insert({
       condo_id,
       unit_id: intent_category === "unit" ? unit_id : null,
-      description_raw: session.draft_description,
-      description_clean: session.draft_description,
+      description_raw: finalDescription,
+      description_clean: finalDescription,
       source: "whatsapp",
       status: "new",
       is_common_area: intent_category === "common_area",
@@ -490,14 +523,20 @@ if (session.state === "confirm" && description_raw === "1") {
     .select()
     .single();
 
-  if (error || !ticket) throw error;
+  if (error || !data) throw error;
+
+  ticket = data; // ✅ assign to outer variable
 
   /* ---------- 2️⃣ FINALIZE SESSION ---------- */
-  await updateSession({
-    state: "done",
-    current_ticket_id: ticket.id,
-    draft_description: null
-  });
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "ticket_created",
+      current_ticket_id: ticket.id,
+      draft_description: null,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", session.id);
 
   return res.status(200).json({
     reply: AUTO_REPLIES.ticketCreated[lang],
