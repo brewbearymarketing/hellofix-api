@@ -310,13 +310,19 @@ export default async function handler(
   }
 
   try {
+    const TRACE = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    console.log("🟢 TRACE START", TRACE);
+
     /* ================= 0. PARSE ================= */
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
 
+    console.log("📥 REQUEST", TRACE, { condo_id, phone_number });
+
     if (!condo_id || !phone_number) {
+      console.log("❌ MISSING FIELDS", TRACE);
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -330,7 +336,15 @@ export default async function handler(
     const stripped = stripWhatsAppNoise(rawText);
     const detectedLang = detectLanguage(stripped);
 
-     /* ================= 2. FETCH OR CREATE SESSION ================= */
+    console.log("📩 MESSAGE", TRACE, {
+      rawText,
+      stripped,
+      description_raw,
+      description_clean,
+      detectedLang
+    });
+
+    /* ================= 2. FETCH OR CREATE SESSION ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -339,6 +353,7 @@ export default async function handler(
       .maybeSingle();
 
     if (!session) {
+      console.log("🆕 CREATING SESSION", TRACE);
       const { data } = await supabase
         .from("conversation_sessions")
         .insert({
@@ -354,10 +369,19 @@ export default async function handler(
     }
 
     if (!session || !session.id) {
+      console.log("🔥 SESSION INVALID", TRACE, session);
       throw new Error("Session invalid");
     }
 
+    console.log("🧠 SESSION LOADED", TRACE, {
+      id: session.id,
+      state: session.state,
+      language: session.language,
+      current_ticket_id: session.current_ticket_id
+    });
+
     async function updateSession(fields: Record<string, any>) {
+      console.log("📝 UPDATE SESSION", TRACE, fields);
       await supabase
         .from("conversation_sessions")
         .update({
@@ -367,7 +391,7 @@ export default async function handler(
         .eq("id", session.id);
     }
 
-       /* ================= 3. VERIFY RESIDENT ================= */
+    /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -375,7 +399,10 @@ export default async function handler(
       .eq("phone_number", phone_number)
       .maybeSingle();
 
+    console.log("🏠 RESIDENT", TRACE, resident);
+
     if (!resident || !resident.approved) {
+      console.log("⛔ RESIDENT NOT APPROVED", TRACE);
       return res.status(403).json({
         error: "Phone number not approved by management"
       });
@@ -383,16 +410,22 @@ export default async function handler(
 
     const unit_id = resident.unit_id;
 
-/* ================= 4. GREETING / NOISE HARD BLOCK ================= */
-/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
-if (
-  session?.state === "idle" &&
-  !hasProblemSignal(rawText)
-) {
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
+    /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
+    console.log("🚦 GREETING CHECK", TRACE, {
+      state: session.state,
+      hasProblemSignal: hasProblemSignal(rawText),
+      rawText
+    });
+
+    if (
+      session.state === "idle" &&
+      !hasProblemSignal(rawText)
+    ) {
+      console.log("🟡 EXIT: GREETING HARD BLOCK", TRACE);
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[detectedLang]
+      });
+    }
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
@@ -401,6 +434,8 @@ if (
     }
 
     const lang = session.language as "en" | "ms" | "zh" | "ta";
+
+    console.log("🌐 LANGUAGE LOCKED", TRACE, lang);
 
     /* ================= 6. INTENT DETECTION ================= */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
@@ -413,6 +448,12 @@ if (
     const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
     const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
     const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
+
+    console.log("🧭 INTENT KEYWORDS", TRACE, {
+      commonHit,
+      unitHit,
+      ambiguousHit
+    });
 
     if (unitHit && commonHit) {
       intent_category = "mixed";
@@ -428,6 +469,7 @@ if (
       intent_source = "keyword";
     } else {
       const ai = await aiClassify(description_clean);
+      console.log("🤖 AI INTENT", TRACE, ai);
       if (ai.confidence >= 0.7) {
         intent_category = ai.category;
         intent_confidence = ai.confidence;
@@ -435,14 +477,24 @@ if (
       }
     }
 
+    console.log("🧭 FINAL INTENT", TRACE, {
+      intent_category,
+      intent_source,
+      intent_confidence
+    });
+
     /* =======================================================
-       7. CLARIFY → CONFIRM (BANK-GRADE GATE)
+       7. CLARIFY → CONFIRM
        ======================================================= */
     if (session.state === "idle") {
+      console.log("🟦 SECTION 7 HIT", TRACE);
+
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
+
+      console.log("🟦 EXIT: ASK CONFIRMATION", TRACE);
 
       return res.status(200).json({
         reply:
@@ -457,8 +509,14 @@ if (
     }
 
     /* ================= 8. EDIT FLOW ================= */
+    console.log("🟨 SECTION 8 CHECK", TRACE, {
+      state: session.state,
+      input: description_raw
+    });
+
     if (session.state === "confirm" && description_raw === "2") {
       await updateSession({ state: "editing" });
+      console.log("🟨 EXIT: ENTER EDIT MODE", TRACE);
 
       return res.status(200).json({
         reply:
@@ -478,6 +536,8 @@ if (
         draft_description: description_clean
       });
 
+      console.log("🟨 EXIT: UPDATED DRAFT", TRACE);
+
       return res.status(200).json({
         reply:
           lang === "ms"
@@ -490,26 +550,31 @@ if (
       });
     }
 
-    /* =======================================================
-       🔒 HARD EXECUTION BARRIER 
-       ======================================================= */
+    /* ================= HARD EXECUTION BARRIER ================= */
     if (session.state !== "confirm") {
+      console.log("🟥 EXECUTION BARRIER HIT", TRACE, session.state);
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[lang]
       });
     }
 
-    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
+    /* ================= 9. EXECUTE ================= */
+    console.log("🟩 SECTION 9 CHECK", TRACE, {
+      state: session.state,
+      input: description_raw
+    });
+
     if (description_raw === "1" && session.state === "confirm") {
-      // 🛑 Anti-replay
-     
+      if (session.current_ticket_id) {
+        console.log("♻️ ANTI-REPLAY", TRACE, session.current_ticket_id);
         return res.status(200).json({
           reply: AUTO_REPLIES.ticketCreated[lang],
           ticket_id: session.current_ticket_id
         });
-   
+      }
 
-      /* ---------- CREATE TICKET ---------- */
+      console.log("🟩 CREATING TICKET", TRACE);
+
       const { data: ticket, error } = await supabase
         .from("tickets")
         .insert({
@@ -530,62 +595,15 @@ if (
 
       if (error || !ticket) throw error;
 
-      /* ---------- EMBEDDING ---------- */
-      let embedding: number[] | null = null;
+      console.log("🟩 TICKET CREATED", TRACE, ticket.id);
 
-      if (openai) {
-        const emb = await openai.embeddings.create({
-          model: "text-embedding-3-small",
-          input: session.draft_description
-        });
-
-        embedding = emb.data[0].embedding;
-
-        await supabase
-          .from("tickets")
-          .update({ embedding })
-          .eq("id", ticket.id);
-      }
-
-      /* ---------- DUPLICATE CHECK ---------- */
-      if (embedding) {
-        const { data: relation } = await supabase.rpc(
-          "detect_ticket_relation",
-          {
-            query_embedding: embedding,
-            condo_filter: condo_id,
-            ticket_unit_id: intent_category === "unit" ? unit_id : null,
-            ticket_is_common_area: intent_category === "common_area",
-            exclude_id: ticket.id,
-            similarity_threshold: 0.85
-          }
-        );
-
-        if (relation?.length) {
-          const r = relation[0];
-          await supabase
-            .from("tickets")
-            .update({
-              is_duplicate: r.relation_type === "hard_duplicate",
-              duplicate_of:
-                r.relation_type === "hard_duplicate"
-                  ? r.related_ticket_id
-                  : null,
-              related_to:
-                r.relation_type === "related"
-                  ? r.related_ticket_id
-                  : null
-            })
-            .eq("id", ticket.id);
-        }
-      }
-
-      /* ---------- FINALIZE ---------- */
       await updateSession({
         state: "done",
         current_ticket_id: ticket.id,
         draft_description: null
       });
+
+      console.log("🔚 TRACE END", TRACE);
 
       return res.status(200).json({
         reply: AUTO_REPLIES.ticketCreated[lang],
@@ -593,7 +611,8 @@ if (
       });
     }
 
-    /* ================= FALLBACK ================= */
+    console.log("🔚 FALLBACK EXIT", TRACE);
+
     return res.status(200).json({
       reply: AUTO_REPLIES.greeting[lang]
     });
@@ -606,4 +625,3 @@ if (
     });
   }
 }
-
