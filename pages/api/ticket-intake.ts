@@ -559,69 +559,167 @@ export default async function handler(
     }
 
     /* ================= 9. EXECUTE ================= */
-    console.log("🟩 SECTION 9 CHECK", TRACE, {
-      state: session.state,
-      input: description_raw
-    });
+    /* =======================================================
+   9. EXECUTE (CONFIRM ONLY, ENTERPRISE GRADE)
+   ======================================================= */
 
-    if (description_raw === "1" && session.state === "confirm") {
-      if (session.current_ticket_id) {
-        console.log("♻️ ANTI-REPLAY", TRACE, session.current_ticket_id);
-        return res.status(200).json({
-          reply: AUTO_REPLIES.ticketCreated[lang],
-          ticket_id: session.current_ticket_id
-        });
-      }
+console.log("➡️ [S9] Enter Section 9");
+console.log("➡️ [S9] session.state =", session.state);
+console.log("➡️ [S9] description_raw =", description_raw);
+console.log("➡️ [S9] current_ticket_id =", session.current_ticket_id);
 
-      console.log("🟩 CREATING TICKET", TRACE);
+/* 🚫 HARD BLOCK — MUST BE CONFIRM STATE */
+if (session.state !== "confirm") {
+  console.log("⛔ [S9] Blocked: session.state is NOT confirm");
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[lang]
+  });
+}
 
-      const { data: ticket, error } = await supabase
-        .from("tickets")
-        .insert({
-          condo_id,
-          unit_id: intent_category === "unit" ? unit_id : null,
-          description_raw: session.draft_description,
-          description_clean: session.draft_description,
-          source: "whatsapp",
-          status: "new",
-          is_common_area: intent_category === "common_area",
-          intent_category,
-          intent_source,
-          intent_confidence,
-          diagnosis_fee: intent_category === "unit" ? 30 : 0
-        })
-        .select()
-        .single();
+/* 🚫 HARD BLOCK — MUST EXPLICITLY CONFIRM */
+if (description_raw !== "1") {
+  console.log("⛔ [S9] Blocked: description_raw is not '1'");
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? "Sila balas 1️⃣ untuk sahkan atau 2️⃣ untuk edit."
+        : lang === "zh"
+        ? "请回复 1️⃣ 确认 或 2️⃣ 编辑。"
+        : lang === "ta"
+        ? "1️⃣ உறுதி அல்லது 2️⃣ திருத்த என பதிலளிக்கவும்."
+        : "Please reply 1️⃣ to confirm or 2️⃣ to edit."
+  });
+}
 
-      if (error || !ticket) throw error;
+/* 🛑 ANTI-REPLAY — TICKET ALREADY CREATED */
+if (session.current_ticket_id) {
+  console.log("🛑 [S9] Anti-replay triggered, ticket already exists");
+  return res.status(200).json({
+    reply: AUTO_REPLIES.ticketCreated[lang],
+    ticket_id: session.current_ticket_id
+  });
+}
 
-      console.log("🟩 TICKET CREATED", TRACE, ticket.id);
+console.log("✅ [S9] Passed all guards — proceeding to ticket creation");
 
-      await updateSession({
-        state: "done",
-        current_ticket_id: ticket.id,
-        draft_description: null
-      });
+/* =======================================================
+   9.1 CREATE TICKET (IRREVERSIBLE)
+   ======================================================= */
+console.log("📝 [S9.1] Creating ticket with draft:", session.draft_description);
 
-      console.log("🔚 TRACE END", TRACE);
+const { data: ticket, error: ticketError } = await supabase
+  .from("tickets")
+  .insert({
+    condo_id,
+    unit_id: intent_category === "unit" ? unit_id : null,
+    description_raw: session.draft_description,
+    description_clean: session.draft_description,
+    source: "whatsapp",
+    status: "new",
+    is_common_area: intent_category === "common_area",
+    intent_category,
+    intent_source,
+    intent_confidence,
+    diagnosis_fee: intent_category === "unit" ? 30 : 0
+  })
+  .select()
+  .single();
 
-      return res.status(200).json({
-        reply: AUTO_REPLIES.ticketCreated[lang],
-        ticket_id: ticket.id
-      });
+if (ticketError || !ticket) {
+  console.error("❌ [S9.1] Ticket creation failed", ticketError);
+  throw ticketError;
+}
+
+console.log("✅ [S9.1] Ticket created:", ticket.id);
+
+/* =======================================================
+   9.2 GENERATE EMBEDDING (MANDATORY)
+   ======================================================= */
+let embedding: number[] | null = null;
+
+if (openai) {
+  console.log("🧬 [S9.2] Generating embedding");
+
+  const emb = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: session.draft_description
+  });
+
+  embedding = emb.data[0].embedding;
+
+  await supabase
+    .from("tickets")
+    .update({ embedding })
+    .eq("id", ticket.id);
+
+  console.log("✅ [S9.2] Embedding stored");
+} else {
+  console.log("⚠️ [S9.2] OpenAI unavailable, skipping embedding");
+}
+
+/* =======================================================
+   9.3 DUPLICATE / RELATED DETECTION
+   ======================================================= */
+if (embedding) {
+  console.log("🔍 [S9.3] Running duplicate detection");
+
+  const { data: relation } = await supabase.rpc(
+    "detect_ticket_relation",
+    {
+      query_embedding: embedding,
+      condo_filter: condo_id,
+      ticket_unit_id: intent_category === "unit" ? unit_id : null,
+      ticket_is_common_area: intent_category === "common_area",
+      exclude_id: ticket.id,
+      similarity_threshold: 0.85
     }
+  );
 
-    console.log("🔚 FALLBACK EXIT", TRACE);
+  if (relation?.length) {
+    const r = relation[0];
 
-    return res.status(200).json({
-      reply: AUTO_REPLIES.greeting[lang]
-    });
+    console.log("⚠️ [S9.3] Relation found:", r.relation_type);
 
-  } catch (err: any) {
-    console.error("🔥 ERROR:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
-    });
+    await supabase
+      .from("tickets")
+      .update({
+        is_duplicate: r.relation_type === "hard_duplicate",
+        duplicate_of:
+          r.relation_type === "hard_duplicate"
+            ? r.related_ticket_id
+            : null,
+        related_to:
+          r.relation_type === "related"
+            ? r.related_ticket_id
+            : null
+      })
+      .eq("id", ticket.id);
+  } else {
+    console.log("✅ [S9.3] No duplicates found");
   }
+}
+
+/* =======================================================
+   9.4 FINALIZE SESSION (LOCK)
+   ======================================================= */
+console.log("🔒 [S9.4] Locking session");
+
+await updateSession({
+  state: "done",
+  current_ticket_id: ticket.id,
+  draft_description: null
+});
+
+console.log("✅ [S9.4] Session locked");
+
+/* =======================================================
+   9.5 FINAL RESPONSE
+   ======================================================= */
+console.log("📤 [S9.5] Returning final response");
+
+return res.status(200).json({
+  reply: AUTO_REPLIES.ticketCreated[lang],
+  ticket_id: ticket.id
+});
+}
 }
