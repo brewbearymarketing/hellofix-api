@@ -1,7 +1,6 @@
  /*=====no voice (need to patch later) but language detect work, greeting hi blocked======*/
 
 import type { NextApiRequest, NextApiResponse } from "next";
-throw new Error("🔥 API FILE LOADED");
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
