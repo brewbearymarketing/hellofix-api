@@ -423,47 +423,61 @@ export default async function handler(
     }
 
     /* ================= 7. CONFIRMATION GATE ================= */
-if (session.state !== "confirm" && description_raw !== "1") {
+/*
+RULE:
+- Any NON "1" or "2" input enters confirmation
+- Ticket creation is BLOCKED here
+*/
+
+if (session.state !== "confirm" && description_raw !== "1" && description_raw !== "2") {
   await updateSession({
     state: "confirm",
     draft_description: description_clean
   });
 
   return res.status(200).json({
-    reply: `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+    reply:
+      lang === "ms"
+        ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+        : lang === "zh"
+        ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+        : lang === "ta"
+        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+        : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
   });
 }
 
     /* ================= 8. USER EDIT ================= */
-    if (session.state === "confirm" && description_raw === "2") {
-      await updateSession({ state: "clarify" });
+if (session.state === "confirm" && description_raw === "2") {
+  await updateSession({
+    state: "clarify",
+    draft_description: null
+  });
 
-      return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? "Baik 👍 Sila taip semula masalah anda."
-            : lang === "zh"
-            ? "好的 👍 请重新输入您的问题。"
-            : lang === "ta"
-            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
-            : "Okay 👍 Please retype your issue."
-      });
-    }
+  return res.status(200).json({
+    reply:
+      lang === "ms"
+        ? "Baik 👍 Sila taip semula masalah anda."
+        : lang === "zh"
+        ? "好的 👍 请重新输入您的问题。"
+        : lang === "ta"
+        ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
+        : "Okay 👍 Please retype your issue."
+  });
+}
+
 
     /* ================= 9. EXECUTE (ONLY AFTER CONFIRM) ================= */
    /* ================= EXECUTE (CONFIRM → CREATE TICKET) ================= */
-if (
-  session.state === "confirm" &&
-  description_raw === "1"
-) {
+if (session.state === "confirm" && description_raw === "1") {
 
-  /* ---------- 1️⃣ CREATE TICKET (IRREVERSIBLE) ---------- */
-const { data: ticket, error } = await supabase
+  /* ---------- 1️⃣ CREATE TICKET ---------- */
+  const { data: ticket, error } = await supabase
     .from("tickets")
     .insert({
       condo_id,
       unit_id: intent_category === "unit" ? unit_id : null,
-      description_raw,
+      description_raw: session.draft_description,
       description_clean: session.draft_description,
       source: "whatsapp",
       status: "new",
@@ -478,6 +492,7 @@ const { data: ticket, error } = await supabase
 
   if (error || !ticket) throw error;
 
+  /* ---------- 2️⃣ FINALIZE SESSION ---------- */
   await updateSession({
     state: "done",
     current_ticket_id: ticket.id,
