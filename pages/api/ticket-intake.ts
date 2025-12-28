@@ -300,8 +300,6 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 /*======================ABOVE THIS LINE 🧰 Tools, rules, and helpers that wont auto executed==========*/
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
-/* ================= API HANDLER ================= */
-/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -323,20 +321,19 @@ export default async function handler(
 
     /* ================= 1. RAW MESSAGE ================= */
     const description_raw = await normalizeIncomingMessage(body);
-    const description_clean = await aiCleanDescription(description_raw);
-
     const rawText =
       typeof body.description_raw === "string" ? body.description_raw : "";
 
-    const stripped = stripWhatsAppNoise(rawText);
-    const detectedLang = detectLanguage(stripped);
+    const strippedRaw = stripWhatsAppNoise(rawText);
 
-  /* ================= 2. GREETING / NOISE HARD BLOCK ================= */
-if (!hasProblemSignal(rawText)) {
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
+    /* ================= 2. STRICT GREETING / NOISE BLOCK ================= */
+    // No problem signal → NEVER advance state
+    if (!hasStrongProblemSignal(strippedRaw)) {
+      const lang = detectLanguage(strippedRaw);
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[lang]
+      });
+    }
 
     /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
@@ -369,7 +366,7 @@ if (!hasProblemSignal(rawText)) {
           condo_id,
           phone_number,
           state: "idle",
-          language: detectedLang
+          language: detectLanguage(strippedRaw) // TEMP language
         })
         .select()
         .single();
@@ -377,13 +374,9 @@ if (!hasProblemSignal(rawText)) {
       session = data;
     }
 
-    if (!session || !session.id) {
-      throw new Error("Session invalid");
-    }
+    if (!session?.id) throw new Error("Session invalid");
 
-    async function updateSession(
-      fields: Record<string, any>
-    ) {
+    const updateSession = async (fields: Record<string, any>) => {
       await supabase
         .from("conversation_sessions")
         .update({
@@ -391,34 +384,34 @@ if (!hasProblemSignal(rawText)) {
           updated_at: new Date().toISOString()
         })
         .eq("id", session.id);
-    }
+    };
 
-    /* ================= 5. LANGUAGE LOCK LOGIC ================= */
-    const isGreeting = isPureGreeting(rawText);
-
-    if (isGreeting && !session.language) {
-      await updateSession({ language: detectedLang });
+    /* ================= 5. FIRST MEANINGFUL COMPLAINT ================= */
+    // Language locked ONLY here
+    if (!session.language_locked) {
+      const detectedLang = detectLanguage(strippedRaw);
+      await updateSession({
+        language: detectedLang,
+        language_locked: true
+      });
       session.language = detectedLang;
     }
 
-    if (!isGreeting && session.language !== detectedLang) {
-      await updateSession({ language: detectedLang });
-      session.language = detectedLang;
-    }
+    const lang = session.language as Lang;
 
-    const lang = (session.language as Lang) || detectedLang;
+    /* ================= 6. CLEAN + INTENT ================= */
+    const description_clean = await aiCleanDescription(description_raw);
 
-    /* ================= 6. INTENT DETECTION (CLARIFY) ================= */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
       "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
 
-    const textForIntent = description_clean.toLowerCase();
+    const t = description_clean.toLowerCase();
 
-    const commonHit = keywordMatch(textForIntent, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(textForIntent, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(textForIntent, AMBIGUOUS_KEYWORDS);
+    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
+    const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
+    const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
 
     if (unitHit && commonHit) {
       intent_category = "mixed";
@@ -441,195 +434,145 @@ if (!hasProblemSignal(rawText)) {
       }
     }
 
-    /* =================7. START DRAFT ================= */
-if (session.state === "idle") {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "confirm",                // 🔒 explicit confirmation gate
-      draft_description: description_clean,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
+    /* ================= 7. CLARIFY → CONFIRM ================= */
+    if (session.state === "idle") {
+      await updateSession({
+        state: "confirm",
+        draft_description: description_clean
+      });
 
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : lang === "zh"
-        ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-        : lang === "ta"
-        ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-        : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
-  });
-}
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            : lang === "zh"
+            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            : lang === "ta"
+            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+      });
+    }
 
+    /* ================= 8. EDIT FLOW ================= */
+    if (session.state === "confirm" && description_raw === "2") {
+      await updateSession({ state: "editing" });
 
-    /* ================= 8. USER EDIT ================= */
-if (session.state === "confirm" && description_raw === "2") {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "editing",
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? "Baik 👍 Sila taip semula masalah anda."
+            : lang === "zh"
+            ? "好的 👍 请重新输入您的问题。"
+            : lang === "ta"
+            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
+            : "Okay 👍 Please retype your issue."
+      });
+    }
 
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? "Baik 👍 Sila taip semula masalah anda."
-        : lang === "zh"
-        ? "好的 👍 请重新输入您的问题。"
-        : lang === "ta"
-        ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
-        : "Okay 👍 Please retype your issue."
-  });
-}
+    if (session.state === "editing") {
+      await updateSession({
+        state: "confirm",
+        draft_description: description_clean
+      });
 
-/* ================= 8.1 UPDATE EDITED CONTENT ================= */
-if (session.state === "editing") {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "confirm",
-      draft_description: description_clean,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            : lang === "zh"
+            ? `已更新草稿：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            : lang === "ta"
+            ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+      });
+    }
 
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-        : lang === "zh"
-        ? `已更新草稿：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-        : lang === "ta"
-        ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-        : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
-  });
-}
-
-/* ================= 9. EXECUTE (CONFIRM ONLY, ONCE) ================= */
-if (session.state === "confirm" && description_raw === "1") {
-
-  // 🛑 ANTI-REPLAY: ticket already created
-  if (session.current_ticket_id) {
-    return res.status(200).json({
-      reply: AUTO_REPLIES.ticketCreated[lang],
-      ticket_id: session.current_ticket_id
-    });
-  }
-
-  /* ---------- 1️⃣ CREATE TICKET ---------- */
-  const { data: ticket, error } = await supabase
-    .from("tickets")
-    .insert({
-      condo_id,
-      unit_id: intent_category === "unit" ? unit_id : null,
-      description_raw: session.draft_description,
-      description_clean: session.draft_description,
-      source: "whatsapp",
-      status: "new",
-      is_common_area: intent_category === "common_area",
-      intent_category,
-      intent_source,
-      intent_confidence,
-      diagnosis_fee: intent_category === "unit" ? 30 : 0
-    })
-    .select()
-    .single();
-
-  if (error || !ticket) throw error;
-
-  /* ---------- 2️⃣ LOCK SESSION (IDEMPOTENT) ---------- */
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "done",
-      current_ticket_id: ticket.id,
-      draft_description: null,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", session.id);
-
-  return res.status(200).json({
-    reply: AUTO_REPLIES.ticketCreated[lang],
-    ticket_id: ticket.id
-  });
-}
-
-  /* ---------- 2️⃣ GENERATE EMBEDDING (AFTER TICKET EXISTS) ---------- */
-  let embedding: number[] | null = null;
-
-  if (openai) {
-    const emb = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: description_clean
-    });
-
-    embedding = emb.data[0].embedding;
-
-    await supabase
-      .from("tickets")
-      .update({ embedding })
-      .eq("id", ticket.id);
-  }
-
-  /* ---------- 3️⃣ DUPLICATE / RELATED CHECK ---------- */
-  let duplicate_of: string | null = null;
-  let related_to: string | null = null;
-
-  if (embedding) {
-    const { data: relation } = await supabase.rpc(
-      "detect_ticket_relation",
-      {
-        query_embedding: embedding,
-        condo_filter: condo_id,
-        ticket_unit_id: intent_category === "unit" ? unit_id : null,
-        ticket_is_common_area: intent_category === "common_area",
-        exclude_id: ticket.id,
-        similarity_threshold: 0.85
-      }
-    );
-
-    if (relation?.length) {
-      const r = relation[0];
-
-      if (r.relation_type === "hard_duplicate") {
-        duplicate_of = r.related_ticket_id;
+    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
+    if (session.state === "confirm" && description_raw === "1") {
+      // 🔐 Anti-replay
+      if (session.current_ticket_id) {
+        return res.status(200).json({
+          reply: AUTO_REPLIES.ticketCreated[lang],
+          ticket_id: session.current_ticket_id
+        });
       }
 
-      if (r.relation_type === "related") {
-        related_to = r.related_ticket_id;
-      }
+      const { data: ticket, error } = await supabase
+        .from("tickets")
+        .insert({
+          condo_id,
+          unit_id: intent_category === "unit" ? unit_id : null,
+          description_raw: session.draft_description,
+          description_clean: session.draft_description,
+          source: "whatsapp",
+          status: "new",
+          is_common_area: intent_category === "common_area",
+          intent_category,
+          intent_source,
+          intent_confidence,
+          diagnosis_fee: intent_category === "unit" ? 30 : 0
+        })
+        .select()
+        .single();
+
+      if (error || !ticket) throw error;
+
+      /* ===== EMBEDDING ===== */
+      const emb = await openai!.embeddings.create({
+        model: "text-embedding-3-small",
+        input: session.draft_description
+      });
 
       await supabase
         .from("tickets")
-        .update({
-          is_duplicate: !!duplicate_of,
-          duplicate_of,
-          related_to
-        })
+        .update({ embedding: emb.data[0].embedding })
         .eq("id", ticket.id);
+
+      /* ===== DUPLICATE CHECK ===== */
+      const { data: relation } = await supabase.rpc(
+        "detect_ticket_relation",
+        {
+          query_embedding: emb.data[0].embedding,
+          condo_filter: condo_id,
+          ticket_unit_id: unit_id,
+          ticket_is_common_area: intent_category === "common_area",
+          exclude_id: ticket.id,
+          similarity_threshold: 0.85
+        }
+      );
+
+      if (relation?.length) {
+        const r = relation[0];
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: r.relation_type === "hard_duplicate",
+            duplicate_of:
+              r.relation_type === "hard_duplicate"
+                ? r.related_ticket_id
+                : null,
+            related_to:
+              r.relation_type === "related"
+                ? r.related_ticket_id
+                : null
+          })
+          .eq("id", ticket.id);
+      }
+
+      await updateSession({
+        state: "done",
+        current_ticket_id: ticket.id,
+        draft_description: null
+      });
+
+      return res.status(200).json({
+        reply:
+          relation?.[0]?.relation_type === "hard_duplicate"
+            ? AUTO_REPLIES.duplicateNotice[lang]
+            : AUTO_REPLIES.ticketCreated[lang],
+        ticket_id: ticket.id
+      });
     }
-  }
-
-  /* ---------- 4️⃣ FINALIZE SESSION ---------- */
-  await updateSession(session.id, {
-    state: "done",
-    current_ticket_id: ticket.id,
-    draft_description: null
-  });
-
-  /* ---------- 5️⃣ FINAL RESPONSE ---------- */
-  return res.status(200).json({
-    reply: duplicate_of
-      ? AUTO_REPLIES.duplicateNotice[lang]
-      : AUTO_REPLIES.ticketCreated[lang],
-    ticket_id: ticket.id
-  });
-}
 
     /* ================= FALLBACK ================= */
     return res.status(200).json({
