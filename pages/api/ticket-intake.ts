@@ -457,7 +457,7 @@ if (
     }
 
     /* ================= 8. EDIT FLOW ================= */
-    if (session.state === "confirm" && description_raw === "2") {
+    if (session.state === "confirm" && description_raw === "2") {{
       await updateSession({ state: "editing" });
 
       return res.status(200).json({
@@ -488,6 +488,7 @@ if (
             ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
             : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
+    }
     }
 
     /* =======================================================
