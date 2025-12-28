@@ -330,12 +330,16 @@ export default async function handler(
     const stripped = stripWhatsAppNoise(rawText);
     const detectedLang = detectLanguage(stripped);
 
-    /* ================= 2. STRICT GREETING / NOISE BLOCK ================= */
-    if (!hasProblemSignal(rawText)) {
-      return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[detectedLang]
-      });
-    }
+/* ================= 2. GREETING / NOISE HARD BLOCK ================= */
+/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
+if (
+  session?.state === "idle" &&
+  !hasProblemSignal(rawText)
+) {
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
 
     /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
