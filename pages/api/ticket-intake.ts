@@ -1,4 +1,4 @@
-/*=====no voice (need to patch later) but language detect work, greeting hi blocked======*/
+ /*=====no voice (need to patch later) but language detect work, greeting hi blocked======*/
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
@@ -330,34 +330,7 @@ export default async function handler(
     const stripped = stripWhatsAppNoise(rawText);
     const detectedLang = detectLanguage(stripped);
 
-/* ================= 2. GREETING / NOISE HARD BLOCK ================= */
-/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
-if (
-  session?.state === "idle" &&
-  !hasProblemSignal(rawText)
-) {
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[detectedLang]
-  });
-}
-
-    /* ================= 3. VERIFY RESIDENT ================= */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
-    }
-
-    const unit_id = resident.unit_id;
-
-    /* ================= 4. FETCH OR CREATE SESSION ================= */
+     /* ================= 2. FETCH OR CREATE SESSION ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -393,6 +366,33 @@ if (
         })
         .eq("id", session.id);
     }
+
+/* ================= 3. GREETING / NOISE HARD BLOCK ================= */
+/* 🚨 ONLY APPLY WHEN SESSION IS IDLE */
+if (
+  session?.state === "idle" &&
+  !hasProblemSignal(rawText)
+) {
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
+
+    /* ================= 4. VERIFY RESIDENT ================= */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
+
+    const unit_id = resident.unit_id;
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
