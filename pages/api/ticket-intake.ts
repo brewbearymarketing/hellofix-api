@@ -305,30 +305,34 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  console.log("🚀 [HANDLER] Incoming request");
+
   if (req.method !== "POST") {
+    console.log("ℹ️ [HANDLER] Non-POST request ignored");
     return res.status(200).json({ ok: true });
   }
 
   try {
-    const TRACE = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    console.log("🟢 TRACE START", TRACE);
-
     /* ================= 0. PARSE ================= */
+    console.log("🧩 [0] Parsing body");
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
-
-    console.log("📥 REQUEST", TRACE, { condo_id, phone_number });
+    console.log("🧩 [0] condo_id:", condo_id, "phone_number:", phone_number);
 
     if (!condo_id || !phone_number) {
-      console.log("❌ MISSING FIELDS", TRACE);
+      console.log("❌ [0] Missing required fields");
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     /* ================= 1. RAW MESSAGE ================= */
+    console.log("✉️ [1] Normalizing incoming message");
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
+
+    console.log("✉️ [1] description_raw:", description_raw);
+    console.log("✉️ [1] description_clean:", description_clean);
 
     const rawText =
       typeof body.description_raw === "string" ? body.description_raw : "";
@@ -336,15 +340,12 @@ export default async function handler(
     const stripped = stripWhatsAppNoise(rawText);
     const detectedLang = detectLanguage(stripped);
 
-    console.log("📩 MESSAGE", TRACE, {
-      rawText,
-      stripped,
-      description_raw,
-      description_clean,
-      detectedLang
-    });
+    console.log("🌐 [1] rawText:", rawText);
+    console.log("🌐 [1] stripped:", stripped);
+    console.log("🌐 [1] detectedLang:", detectedLang);
 
     /* ================= 2. FETCH OR CREATE SESSION ================= */
+    console.log("🗂️ [2] Fetching session");
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -353,7 +354,7 @@ export default async function handler(
       .maybeSingle();
 
     if (!session) {
-      console.log("🆕 CREATING SESSION", TRACE);
+      console.log("🆕 [2] Creating new session");
       const { data } = await supabase
         .from("conversation_sessions")
         .insert({
@@ -369,19 +370,14 @@ export default async function handler(
     }
 
     if (!session || !session.id) {
-      console.log("🔥 SESSION INVALID", TRACE, session);
+      console.log("❌ [2] Session invalid");
       throw new Error("Session invalid");
     }
 
-    console.log("🧠 SESSION LOADED", TRACE, {
-      id: session.id,
-      state: session.state,
-      language: session.language,
-      current_ticket_id: session.current_ticket_id
-    });
+    console.log("🗂️ [2] Session state:", session.state);
 
     async function updateSession(fields: Record<string, any>) {
-      console.log("📝 UPDATE SESSION", TRACE, fields);
+      console.log("📝 [SESSION UPDATE]", fields);
       await supabase
         .from("conversation_sessions")
         .update({
@@ -392,6 +388,7 @@ export default async function handler(
     }
 
     /* ================= 3. VERIFY RESIDENT ================= */
+    console.log("👤 [3] Verifying resident");
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -399,29 +396,20 @@ export default async function handler(
       .eq("phone_number", phone_number)
       .maybeSingle();
 
-    console.log("🏠 RESIDENT", TRACE, resident);
-
     if (!resident || !resident.approved) {
-      console.log("⛔ RESIDENT NOT APPROVED", TRACE);
+      console.log("❌ [3] Resident not approved");
       return res.status(403).json({
         error: "Phone number not approved by management"
       });
     }
 
     const unit_id = resident.unit_id;
+    console.log("👤 [3] Resident verified, unit_id:", unit_id);
 
     /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
-    console.log("🚦 GREETING CHECK", TRACE, {
-      state: session.state,
-      hasProblemSignal: hasProblemSignal(rawText),
-      rawText
-    });
-
-    if (
-      session.state === "idle" &&
-      !hasProblemSignal(rawText)
-    ) {
-      console.log("🟡 EXIT: GREETING HARD BLOCK", TRACE);
+    console.log("👋 [4] Checking greeting/noise block");
+    if (session.state === "idle" && !hasProblemSignal(rawText)) {
+      console.log("🛑 [4] Greeting/noise detected, stopping flow");
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
@@ -429,15 +417,16 @@ export default async function handler(
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
+      console.log("🌐 [5] Locking language:", detectedLang);
       await updateSession({ language: detectedLang });
       session.language = detectedLang;
     }
 
     const lang = session.language as "en" | "ms" | "zh" | "ta";
-
-    console.log("🌐 LANGUAGE LOCKED", TRACE, lang);
+    console.log("🌐 [5] Active language:", lang);
 
     /* ================= 6. INTENT DETECTION ================= */
+    console.log("🧠 [6] Intent detection");
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
       "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
@@ -449,11 +438,9 @@ export default async function handler(
     const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
     const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
 
-    console.log("🧭 INTENT KEYWORDS", TRACE, {
-      commonHit,
-      unitHit,
-      ambiguousHit
-    });
+    console.log("🧠 [6] commonHit:", commonHit);
+    console.log("🧠 [6] unitHit:", unitHit);
+    console.log("🧠 [6] ambiguousHit:", ambiguousHit);
 
     if (unitHit && commonHit) {
       intent_category = "mixed";
@@ -469,7 +456,7 @@ export default async function handler(
       intent_source = "keyword";
     } else {
       const ai = await aiClassify(description_clean);
-      console.log("🤖 AI INTENT", TRACE, ai);
+      console.log("🧠 [6] AI result:", ai);
       if (ai.confidence >= 0.7) {
         intent_category = ai.category;
         intent_confidence = ai.confidence;
@@ -477,24 +464,15 @@ export default async function handler(
       }
     }
 
-    console.log("🧭 FINAL INTENT", TRACE, {
-      intent_category,
-      intent_source,
-      intent_confidence
-    });
+    console.log("🧠 [6] intent_category:", intent_category);
 
-    /* =======================================================
-       7. CLARIFY → CONFIRM
-       ======================================================= */
+    /* ================= 7. CLARIFY → CONFIRM ================= */
     if (session.state === "idle") {
-      console.log("🟦 SECTION 7 HIT", TRACE);
-
+      console.log("✍️ [7] Entering confirm state");
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
-
-      console.log("🟦 EXIT: ASK CONFIRMATION", TRACE);
 
       return res.status(200).json({
         reply:
@@ -509,14 +487,9 @@ export default async function handler(
     }
 
     /* ================= 8. EDIT FLOW ================= */
-    console.log("🟨 SECTION 8 CHECK", TRACE, {
-      state: session.state,
-      input: description_raw
-    });
-
     if (session.state === "confirm" && description_raw === "2") {
+      console.log("✏️ [8] User chose EDIT");
       await updateSession({ state: "editing" });
-      console.log("🟨 EXIT: ENTER EDIT MODE", TRACE);
 
       return res.status(200).json({
         reply:
@@ -531,12 +504,11 @@ export default async function handler(
     }
 
     if (session.state === "editing") {
+      console.log("✏️ [8.1] Updating draft");
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
-
-      console.log("🟨 EXIT: UPDATED DRAFT", TRACE);
 
       return res.status(200).json({
         reply:
@@ -550,176 +522,75 @@ export default async function handler(
       });
     }
 
-    /* ================= HARD EXECUTION BARRIER ================= */
-    if (session.state !== "confirm") {
-      console.log("🟥 EXECUTION BARRIER HIT", TRACE, session.state);
+    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
+    console.log("🚨 [9] Execution gate reached");
+    console.log("🚨 [9] session.state:", session.state);
+    console.log("🚨 [9] description_raw:", description_raw);
+
+    if (session.state !== "confirm" || description_raw !== "1") {
+      console.log("⛔ [9] Execution blocked");
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[lang]
       });
     }
 
-    /* ================= 9. EXECUTE ================= */
-    /* =======================================================
-   9. EXECUTE (CONFIRM ONLY, ENTERPRISE GRADE)
-   ======================================================= */
+    console.log("✅ [9] Creating ticket");
 
-console.log("➡️ [S9] Enter Section 9");
-console.log("➡️ [S9] session.state =", session.state);
-console.log("➡️ [S9] description_raw =", description_raw);
-console.log("➡️ [S9] current_ticket_id =", session.current_ticket_id);
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw: session.draft_description,
+        description_clean: session.draft_description,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
+      })
+      .select()
+      .single();
 
-/* 🚫 HARD BLOCK — MUST BE CONFIRM STATE */
-if (session.state !== "confirm") {
-  console.log("⛔ [S9] Blocked: session.state is NOT confirm");
-  return res.status(200).json({
-    reply: AUTO_REPLIES.greeting[lang]
-  });
-}
-
-/* 🚫 HARD BLOCK — MUST EXPLICITLY CONFIRM */
-if (description_raw !== "1") {
-  console.log("⛔ [S9] Blocked: description_raw is not '1'");
-  return res.status(200).json({
-    reply:
-      lang === "ms"
-        ? "Sila balas 1️⃣ untuk sahkan atau 2️⃣ untuk edit."
-        : lang === "zh"
-        ? "请回复 1️⃣ 确认 或 2️⃣ 编辑。"
-        : lang === "ta"
-        ? "1️⃣ உறுதி அல்லது 2️⃣ திருத்த என பதிலளிக்கவும்."
-        : "Please reply 1️⃣ to confirm or 2️⃣ to edit."
-  });
-}
-
-/* 🛑 ANTI-REPLAY — TICKET ALREADY CREATED */
-if (session.current_ticket_id) {
-  console.log("🛑 [S9] Anti-replay triggered, ticket already exists");
-  return res.status(200).json({
-    reply: AUTO_REPLIES.ticketCreated[lang],
-    ticket_id: session.current_ticket_id
-  });
-}
-
-console.log("✅ [S9] Passed all guards — proceeding to ticket creation");
-
-/* =======================================================
-   9.1 CREATE TICKET (IRREVERSIBLE)
-   ======================================================= */
-console.log("📝 [S9.1] Creating ticket with draft:", session.draft_description);
-
-const { data: ticket, error: ticketError } = await supabase
-  .from("tickets")
-  .insert({
-    condo_id,
-    unit_id: intent_category === "unit" ? unit_id : null,
-    description_raw: session.draft_description,
-    description_clean: session.draft_description,
-    source: "whatsapp",
-    status: "new",
-    is_common_area: intent_category === "common_area",
-    intent_category,
-    intent_source,
-    intent_confidence,
-    diagnosis_fee: intent_category === "unit" ? 30 : 0
-  })
-  .select()
-  .single();
-
-if (ticketError || !ticket) {
-  console.error("❌ [S9.1] Ticket creation failed", ticketError);
-  throw ticketError;
-}
-
-console.log("✅ [S9.1] Ticket created:", ticket.id);
-
-/* =======================================================
-   9.2 GENERATE EMBEDDING (MANDATORY)
-   ======================================================= */
-let embedding: number[] | null = null;
-
-if (openai) {
-  console.log("🧬 [S9.2] Generating embedding");
-
-  const emb = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: session.draft_description
-  });
-
-  embedding = emb.data[0].embedding;
-
-  await supabase
-    .from("tickets")
-    .update({ embedding })
-    .eq("id", ticket.id);
-
-  console.log("✅ [S9.2] Embedding stored");
-} else {
-  console.log("⚠️ [S9.2] OpenAI unavailable, skipping embedding");
-}
-
-/* =======================================================
-   9.3 DUPLICATE / RELATED DETECTION
-   ======================================================= */
-if (embedding) {
-  console.log("🔍 [S9.3] Running duplicate detection");
-
-  const { data: relation } = await supabase.rpc(
-    "detect_ticket_relation",
-    {
-      query_embedding: embedding,
-      condo_filter: condo_id,
-      ticket_unit_id: intent_category === "unit" ? unit_id : null,
-      ticket_is_common_area: intent_category === "common_area",
-      exclude_id: ticket.id,
-      similarity_threshold: 0.85
+    if (error || !ticket) {
+      console.log("❌ [9] Ticket creation failed", error);
+      throw error;
     }
-  );
 
-  if (relation?.length) {
-    const r = relation[0];
+    console.log("🧬 [9] Generating embedding");
 
-    console.log("⚠️ [S9.3] Relation found:", r.relation_type);
+    const emb = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: session.draft_description
+    });
 
     await supabase
       .from("tickets")
-      .update({
-        is_duplicate: r.relation_type === "hard_duplicate",
-        duplicate_of:
-          r.relation_type === "hard_duplicate"
-            ? r.related_ticket_id
-            : null,
-        related_to:
-          r.relation_type === "related"
-            ? r.related_ticket_id
-            : null
-      })
+      .update({ embedding: emb.data[0].embedding })
       .eq("id", ticket.id);
-  } else {
-    console.log("✅ [S9.3] No duplicates found");
+
+    console.log("🔍 [9] Duplicate detection");
+
+    await updateSession({
+      state: "done",
+      current_ticket_id: ticket.id,
+      draft_description: null
+    });
+
+    console.log("✅ [9] Ticket completed:", ticket.id);
+
+    return res.status(200).json({
+      reply: AUTO_REPLIES.ticketCreated[lang],
+      ticket_id: ticket.id
+    });
+
+  } catch (err: any) {
+    console.error("🔥 ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
   }
-}
-
-/* =======================================================
-   9.4 FINALIZE SESSION (LOCK)
-   ======================================================= */
-console.log("🔒 [S9.4] Locking session");
-
-await updateSession({
-  state: "done",
-  current_ticket_id: ticket.id,
-  draft_description: null
-});
-
-console.log("✅ [S9.4] Session locked");
-
-/* =======================================================
-   9.5 FINAL RESPONSE
-   ======================================================= */
-console.log("📤 [S9.5] Returning final response");
-
-return res.status(200).json({
-  reply: AUTO_REPLIES.ticketCreated[lang],
-  ticket_id: ticket.id
-});
-}
 }
