@@ -303,55 +303,46 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
-export const config = {
-  runtime: "nodejs"
-};
-async function handler(
+export const config = { runtime: "nodejs" };
+
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
- res.setHeader("X-Debug", "handler-hit");
-  console.log("🚀 [HANDLER] Incoming request");
+  console.log("🚀 HANDLER HIT");
 
   if (req.method !== "POST") {
-    console.log("ℹ️ [HANDLER] Non-POST request ignored");
+    console.log("❌ NON-POST REQUEST");
     return res.status(200).json({ ok: true });
   }
 
   try {
     /* ================= 0. PARSE ================= */
-    console.log("🧩 [0] Parsing body");
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
-    console.log("🧩 [0] condo_id:", condo_id, "phone_number:", phone_number);
+
+    console.log("📦 BODY", body);
 
     if (!condo_id || !phone_number) {
-      console.log("❌ [0] Missing required fields");
+      console.log("❌ MISSING condo_id / phone_number");
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     /* ================= 1. RAW MESSAGE ================= */
-    console.log("✉️ [1] Normalizing incoming message");
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
-    console.log("✉️ [1] description_raw:", description_raw);
-    console.log("✉️ [1] description_clean:", description_clean);
+    console.log("📝 RAW:", description_raw);
+    console.log("🧹 CLEAN:", description_clean);
 
-    const rawText =
-      typeof body.description_raw === "string" ? body.description_raw : "";
-
-    const stripped = stripWhatsAppNoise(rawText);
+    const stripped = stripWhatsAppNoise(description_raw);
     const detectedLang = detectLanguage(stripped);
 
-    console.log("🌐 [1] rawText:", rawText);
-    console.log("🌐 [1] stripped:", stripped);
-    console.log("🌐 [1] detectedLang:", detectedLang);
+    console.log("🌐 LANG:", detectedLang);
 
-    /* ================= 2. FETCH OR CREATE SESSION ================= */
-    console.log("🗂️ [2] Fetching session");
+    /* ================= 2. SESSION (FIRST) ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -360,7 +351,6 @@ async function handler(
       .maybeSingle();
 
     if (!session) {
-      console.log("🆕 [2] Creating new session");
       const { data } = await supabase
         .from("conversation_sessions")
         .insert({
@@ -373,17 +363,13 @@ async function handler(
         .single();
 
       session = data;
+      console.log("🆕 SESSION CREATED");
     }
 
-    if (!session || !session.id) {
-      console.log("❌ [2] Session invalid");
-      throw new Error("Session invalid");
-    }
-
-    console.log("🗂️ [2] Session state:", session.state);
+    console.log("📍 SESSION STATE:", session.state);
 
     async function updateSession(fields: Record<string, any>) {
-      console.log("📝 [SESSION UPDATE]", fields);
+      console.log("🧠 SESSION UPDATE", fields);
       await supabase
         .from("conversation_sessions")
         .update({
@@ -393,8 +379,18 @@ async function handler(
         .eq("id", session.id);
     }
 
-    /* ================= 3. VERIFY RESIDENT ================= */
-    console.log("👤 [3] Verifying resident");
+    /* ================= 3. GREETING / NOISE BLOCK ================= */
+    if (
+      session.state === "idle" &&
+      !hasProblemSignal(description_raw)
+    ) {
+      console.log("👋 GREETING / NOISE BLOCKED");
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[detectedLang]
+      });
+    }
+
+    /* ================= 4. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -403,36 +399,23 @@ async function handler(
       .maybeSingle();
 
     if (!resident || !resident.approved) {
-      console.log("❌ [3] Resident not approved");
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
+      console.log("⛔ RESIDENT NOT APPROVED");
+      return res.status(403).json({ error: "Not approved" });
     }
 
     const unit_id = resident.unit_id;
-    console.log("👤 [3] Resident verified, unit_id:", unit_id);
-
-    /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
-    console.log("👋 [4] Checking greeting/noise block");
-    if (session.state === "idle" && !hasProblemSignal(rawText)) {
-      console.log("🛑 [4] Greeting/noise detected, stopping flow");
-      return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[detectedLang]
-      });
-    }
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
-      console.log("🌐 [5] Locking language:", detectedLang);
       await updateSession({ language: detectedLang });
       session.language = detectedLang;
     }
 
     const lang = session.language as "en" | "ms" | "zh" | "ta";
-    console.log("🌐 [5] Active language:", lang);
 
     /* ================= 6. INTENT DETECTION ================= */
-    console.log("🧠 [6] Intent detection");
+    console.log("🎯 INTENT DETECTION START");
+
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
       "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
@@ -440,41 +423,27 @@ async function handler(
 
     const t = description_clean.toLowerCase();
 
-    const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
-
-    console.log("🧠 [6] commonHit:", commonHit);
-    console.log("🧠 [6] unitHit:", unitHit);
-    console.log("🧠 [6] ambiguousHit:", ambiguousHit);
-
-    if (unitHit && commonHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (unitHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else if (commonHit) {
+    if (keywordMatch(t, COMMON_AREA_KEYWORDS)) {
       intent_category = "common_area";
       intent_source = "keyword";
-    } else if (ambiguousHit) {
+    } else if (keywordMatch(t, OWN_UNIT_KEYWORDS)) {
       intent_category = "unit";
       intent_source = "keyword";
     } else {
       const ai = await aiClassify(description_clean);
-      console.log("🧠 [6] AI result:", ai);
       if (ai.confidence >= 0.7) {
         intent_category = ai.category;
-        intent_confidence = ai.confidence;
         intent_source = "ai";
+        intent_confidence = ai.confidence;
       }
     }
 
-    console.log("🧠 [6] intent_category:", intent_category);
+    console.log("🎯 INTENT:", intent_category, intent_source);
 
     /* ================= 7. CLARIFY → CONFIRM ================= */
     if (session.state === "idle") {
-      console.log("✍️ [7] Entering confirm state");
+      console.log("🛑 MOVING TO CONFIRM");
+
       await updateSession({
         state: "confirm",
         draft_description: description_clean
@@ -484,120 +453,100 @@ async function handler(
         reply:
           lang === "ms"
             ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-            : lang === "zh"
-            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-            : lang === "ta"
-            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
             : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
 
     /* ================= 8. EDIT FLOW ================= */
     if (session.state === "confirm" && description_raw === "2") {
-      console.log("✏️ [8] User chose EDIT");
+      console.log("✏️ ENTER EDIT MODE");
+
       await updateSession({ state: "editing" });
 
       return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? "Baik 👍 Sila taip semula masalah anda."
-            : lang === "zh"
-            ? "好的 👍 请重新输入您的问题。"
-            : lang === "ta"
-            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
-            : "Okay 👍 Please retype your issue."
+        reply: "Okay 👍 Please retype your issue."
       });
     }
 
     if (session.state === "editing") {
-      console.log("✏️ [8.1] Updating draft");
+      console.log("✏️ UPDATE EDIT");
+
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
 
       return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-            : lang === "zh"
-            ? `已更新草稿：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-            : lang === "ta"
-            ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-            : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        reply: `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
 
-    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
-    console.log("🚨 [9] Execution gate reached");
-    console.log("🚨 [9] session.state:", session.state);
-    console.log("🚨 [9] description_raw:", description_raw);
+    /* ================= 9. EXECUTE (ONLY HERE) ================= */
+    if (session.state === "confirm" && description_raw === "1") {
+      console.log("✅ CONFIRMED → CREATE TICKET");
 
-    if (session.state !== "confirm" || description_raw !== "1") {
-      console.log("⛔ [9] Execution blocked");
+      if (session.current_ticket_id) {
+        console.log("♻️ REPLAY BLOCKED");
+        return res.status(200).json({
+          reply: AUTO_REPLIES.ticketCreated[lang],
+          ticket_id: session.current_ticket_id
+        });
+      }
+
+      const { data: ticket } = await supabase
+        .from("tickets")
+        .insert({
+          condo_id,
+          unit_id: intent_category === "unit" ? unit_id : null,
+          description_raw: session.draft_description,
+          description_clean: session.draft_description,
+          status: "new",
+          source: "whatsapp",
+          intent_category,
+          intent_source,
+          intent_confidence
+        })
+        .select()
+        .single();
+
+      console.log("🎟️ TICKET CREATED:", ticket.id);
+
+      /* ===== EMBEDDING ===== */
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: session.draft_description
+      });
+
+      await supabase
+        .from("tickets")
+        .update({ embedding: emb.data[0].embedding })
+        .eq("id", ticket.id);
+
+      console.log("🧬 EMBEDDING STORED");
+
+      await updateSession({
+        state: "done",
+        current_ticket_id: ticket.id,
+        draft_description: null
+      });
+
       return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[lang]
+        reply: AUTO_REPLIES.ticketCreated[lang],
+        ticket_id: ticket.id
       });
     }
 
-    console.log("✅ [9] Creating ticket");
-
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw: session.draft_description,
-        description_clean: session.draft_description,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
-      })
-      .select()
-      .single();
-
-    if (error || !ticket) {
-      console.log("❌ [9] Ticket creation failed", error);
-      throw error;
-    }
-
-    console.log("🧬 [9] Generating embedding");
-
-    const emb = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: session.draft_description
-    });
-
-    await supabase
-      .from("tickets")
-      .update({ embedding: emb.data[0].embedding })
-      .eq("id", ticket.id);
-
-    console.log("🔍 [9] Duplicate detection");
-
-    await updateSession({
-      state: "done",
-      current_ticket_id: ticket.id,
-      draft_description: null
-    });
-
-    console.log("✅ [9] Ticket completed:", ticket.id);
-
+    /* ================= FALLBACK ================= */
+    console.log("⚠️ FALLBACK HIT");
     return res.status(200).json({
-      reply: AUTO_REPLIES.ticketCreated[lang],
-      ticket_id: ticket.id
+      reply: AUTO_REPLIES.greeting[lang]
     });
 
   } catch (err: any) {
-    console.error("🔥 ERROR:", err);
+    console.error("🔥 FATAL ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
     });
   }
 }
-export default handler;
