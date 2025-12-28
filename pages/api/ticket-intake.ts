@@ -17,6 +17,25 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+/*==================DETECT INTENT TO COMPLAINT=================*/
+function hasProblemSignal(text: string): boolean {
+  const t = stripWhatsAppNoise(text);
+
+  return (
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken") ||
+    t.includes("not working") ||
+    t.includes("tak") ||
+    t.includes("cannot") ||
+    t.includes("problem")
+  );
+}
+
 /* ================= KEYWORDS MATCH ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -312,12 +331,12 @@ export default async function handler(
     const stripped = stripWhatsAppNoise(rawText);
     const detectedLang = detectLanguage(stripped);
 
-    /* ================= 2. GREETING HARD BLOCK (IDLE) ================= */
-    if (isPureGreeting(rawText)) {
-      return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[detectedLang]
-      });
-    }
+  /* ================= 2. GREETING / NOISE HARD BLOCK ================= */
+if (!hasProblemSignal(rawText)) {
+  return res.status(200).json({
+    reply: AUTO_REPLIES.greeting[detectedLang]
+  });
+}
 
     /* ================= 3. VERIFY RESIDENT ================= */
     const { data: resident } = await supabase
