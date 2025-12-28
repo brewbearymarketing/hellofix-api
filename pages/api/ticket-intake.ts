@@ -423,27 +423,16 @@ export default async function handler(
     }
 
     /* ================= 7. CONFIRMATION GATE ================= */
-    if (
-  session.state === "confirm" &&
-  description_raw === "1" &&
-  session.draft_description
-) {
-      await updateSession({
-        state: "confirm",
-        draft_description: description_clean
-      });
+if (session.state !== "confirm" && description_raw !== "1") {
+  await updateSession({
+    state: "confirm",
+    draft_description: description_clean
+  });
 
-      return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-            : lang === "zh"
-            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-            : lang === "ta"
-            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-            : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
-      });
-    }
+  return res.status(200).json({
+    reply: `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+  });
+}
 
     /* ================= 8. USER EDIT ================= */
     if (session.state === "confirm" && description_raw === "2") {
