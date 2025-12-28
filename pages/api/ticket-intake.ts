@@ -303,10 +303,14 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
+export const config = {
+  runtime: "nodejs"
+};
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+ res.setHeader("X-Debug", "handler-hit");
   console.log("🚀 [HANDLER] Incoming request");
 
   if (req.method !== "POST") {
