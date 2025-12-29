@@ -380,12 +380,37 @@ export default async function handler(
     const { condo_id, phone_number } = body;
     console.log("🧩 [0] condo_id:", condo_id, "phone_number:", phone_number);
 
-    if (!condo_id || !phone_number) {
-      console.log("❌ [0] Missing required fields");
-      return res.status(400).json({ error: "Missing required fields" });
+    const phone_number =
+  body?.phone_number ??
+  body?.messages?.[0]?.from ??
+  body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from ??
+  null;
+
+if (!phone_number) {
+  console.warn("⚠️ No phone number found, ignoring webhook");
+  return res.status(200).json({ ok: true });
+}
+
+    /* ================= 1. VERIFY RESIDENT ================= */
+    console.log("👤 [3] Verifying resident");
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      console.log("❌ [3] Resident not approved");
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
     }
 
-    /* ================= 1. RAW MESSAGE ================= */
+    const unit_id = resident.unit_id;
+    console.log("👤 [3] Resident verified, unit_id:", unit_id);
+
+    /* ================= 2. RAW MESSAGE ================= */
     console.log("✉️ [1] Normalizing incoming message");
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
@@ -403,7 +428,7 @@ export default async function handler(
     console.log("🌐 [1] stripped:", stripped);
     console.log("🌐 [1] detectedLang:", detectedLang);
 
-    /* ================= 2. FETCH OR CREATE SESSION ================= */
+    /* ================= 3. FETCH OR CREATE SESSION ================= */
     console.log("🗂️ [2] Fetching session");
     let { data: session } = await supabase
       .from("conversation_sessions")
@@ -445,25 +470,6 @@ export default async function handler(
         })
         .eq("id", session.id);
     }
-
-    /* ================= 3. VERIFY RESIDENT ================= */
-    console.log("👤 [3] Verifying resident");
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      console.log("❌ [3] Resident not approved");
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
-    }
-
-    const unit_id = resident.unit_id;
-    console.log("👤 [3] Resident verified, unit_id:", unit_id);
 
     /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
     console.log("👋 [4] Checking greeting/noise block");
