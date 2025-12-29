@@ -314,8 +314,8 @@ export default async function handler(
     });
   }
 
-  const meaningful = await aiIsMeaningfulIssue(description_raw);
-  if (!meaningful) {
+  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
+  if (!hasMeaningfulIntent) {
     return res.status(200).json({
       success: true,
       ignored: true,
