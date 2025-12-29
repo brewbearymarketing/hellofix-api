@@ -1,4 +1,3 @@
-console.log("🔥 RUNNING: pages/api/ticket-intake.ts");
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
@@ -27,11 +26,12 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
-  "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
-"lampu rumah","lampu bilik",
+  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
+  "master toilet","house bathroom","house lamp","room lamp",
+  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
+  "bilik air rumah","lampu rumah","lampu bilik",
   "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
-  "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
+  "அறை","சமையலறை"
 ];
 
 const AMBIGUOUS_KEYWORDS = [
@@ -39,9 +39,68 @@ const AMBIGUOUS_KEYWORDS = [
   "厕所","空调","கழிப்பிடம்","चिराग","灯"
 ];
 
+/* ===== GREETING GUARD 1/ NO-INTENT KEYWORDS ===== */
+const GREETING_KEYWORDS = [
+  "hi","hello","hey","morning","afternoon","evening",
+  "good morning","good afternoon","good evening",
+  "thanks","thank you","tq","ok","okay","noted",
+  "test","testing","yo","boss","bro","sis",
+
+  // Malay
+  "hai","helo","selamat pagi","selamat petang","selamat malam",
+  "terima kasih","okey",
+
+  // Chinese
+  "你好","早安","晚安","谢谢",
+
+  // Tamil
+  "வணக்கம்","நன்றி"
+];
+
 function keywordMatch(text: string, keywords: string[]) {
   const t = text.toLowerCase();
   return keywords.some(k => t.includes(k.toLowerCase()));
+}
+
+/* ===== GREETING GUARD 2 ===== */
+function isGreetingOnly(text: string): boolean {
+  const t = text.toLowerCase().trim();
+
+  // Very short messages are almost always noise
+  if (t.length <= 6) return true;
+
+  // Pure greeting
+  return GREETING_KEYWORDS.some(
+    k => t === k || t.startsWith(k + " ")
+  );
+}
+
+/* ===== GREETING GUARD 3/ AI MEANINGFUL ISSUE CHECK (BANK-GRADE) ===== */
+async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
+  if (!openai) return true; // fail-open
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Reply ONLY JSON: {\"is_issue\": true|false}. " +
+            "True ONLY if message describes a real property maintenance problem."
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+    return obj.is_issue === true;
+  } catch {
+    return true;
+  }
 }
 
 /* ================= AI CLASSIFIER ================= */
@@ -101,12 +160,6 @@ Rules:
 - Keep ONLY the asset + problem + location if mentioned.
 - No emojis. No apologies. No extra words.
 - Do NOT guess causes. Do NOT add solutions.
-
-Examples:
-"aircond rosak tak sejuk bilik master" → "Master bedroom air conditioner not cooling"
-"paip bocor bawah sink dapur" → "Kitchen sink pipe leaking"
-"lift rosak tingkat 5" → "Elevator malfunction at level 5"
-"lampu koridor level 3 tak nyala" → "Corridor light not working at level 3"
 `
         },
         { role: "user", content: text }
@@ -208,6 +261,24 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    /* ===== GREETING / NO-INTENT GUARD ===== */
+    if (isGreetingOnly(description_raw)) {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: "Greeting / non-actionable message"
+      });
+    }
+
+    const meaningful = await aiIsMeaningfulIssue(description_raw);
+    if (!meaningful) {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: "No maintenance intent detected"
+      });
+    }
+
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
@@ -272,7 +343,7 @@ export default async function handler(
 
     if (error || !ticket) throw error;
 
-    /* ===== EMBEDDING + DUPLICATE (RESTORED) ===== */
+    /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
