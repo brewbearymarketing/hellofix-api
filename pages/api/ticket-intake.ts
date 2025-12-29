@@ -1,6 +1,3 @@
-with voice and description clean PERFECT:
-
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
@@ -16,7 +13,9 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-console.log("OPENAI ENABLED:", !!openai);
+/* ================= TYPES ================= */
+
+type Lang = "en" | "ms" | "zh" | "ta";
 
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
@@ -29,11 +28,12 @@ const COMMON_AREA_KEYWORDS = [
 ];
 
 const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink","house toilet", "room toilet", "master toilet", "house bathroom","house lamp", "room lamp",
-  "bilik","dapur","tandas rumah", "tandas bilik","tandas master","bilik air rumah",
-"lampu rumah","lampu bilik",
+  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
+  "master toilet","house bathroom","house lamp","room lamp",
+  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
+  "bilik air rumah","lampu rumah","lampu bilik",
   "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
-  "அறை","சமையலறை","घर का शौचालय", "कमरे का शौचालय", "मास्टर शौचालय", "घर का बाथरूम","घर का दीपक", "कमरे का दीपक"
+  "அறை","சமையலறை"
 ];
 
 const AMBIGUOUS_KEYWORDS = [
@@ -45,6 +45,64 @@ function keywordMatch(text: string, keywords: string[]) {
   const t = text.toLowerCase();
   return keywords.some(k => t.includes(k.toLowerCase()));
 }
+
+/* ================= HELPERS (MOVED OUTSIDE HANDLER) ================= */
+/* ================= GREETING DETECTOR ================= */
+/* ================= WHATSAPP NOISE STRIPPER (NEW, REQUIRED) ================= */
+function stripWhatsAppNoise(text: string): string {
+  return text
+
+    .replace(/[0-9️⃣•\-–—]/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isPureGreeting(text: string): boolean {
+  if (!text) return true;
+  const t = stripWhatsAppNoise(text);
+
+  // common greeting patterns
+  const greetingPatterns = [
+
+    /^hi+$/,
+    /^hello+$/,
+    /^hey+$/,
+    /^hai+$/,
+    /^helo+$/,
+    /^yo+$/,
+    /^salam$/,
+    /^ass?alamualaikum$/,
+    /^👋+$/,
+    /^wave$/,
+    
+  ];
+
+  // if matches greeting pattern AND no maintenance keywords 
+  const isGreetingWord = greetingPatterns.some(r => r.test(t));
+
+  const hasMaintenanceSignal =
+
+    keywordMatch(t, COMMON_AREA_KEYWORDS) ||
+    keywordMatch(t, OWN_UNIT_KEYWORDS) ||
+    keywordMatch(t, AMBIGUOUS_KEYWORDS) ||
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("leak") ||
+    t.includes("broken");
+
+  return isGreetingWord && !hasMaintenanceSignal;
+
+}
+
+/* ================= GREETING GUARD ================= */
+function isGreetingOnly(text: string): boolean {
+  if (!text) return true;
+  const t = text.toLowerCase().trim();
+  return ["hi","hello","hey","hai","yo","salam","test","ping"].includes(t);
+}
+
 
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
@@ -121,24 +179,132 @@ Examples:
   }
 }
 
-/* ================= TRANSCRIPT CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
+/* ================= LANGUAGE DETECTOR ================= */
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+  if (!text) return "en";
 
-  let t = text.toLowerCase();
+  const t = text.toLowerCase().trim();
 
-  t = t.replace(
-    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
-    ""
-  );
+  /* ========= SCRIPT-BASED (MOST RELIABLE) ========= */
 
-  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-  t = t.replace(/\s+/g, " ").trim();
+  // Mandarin (Chinese)
+  if (/[\u4e00-\u9fff]/.test(text)) return "zh";
 
-  return t.charAt(0).toUpperCase() + t.slice(1);
+  // Hindi (Devanagari)
+  if (/[\u0900-\u097F]/.test(text)) return "ta";
+
+  /* ========= GREETING-BASED ========= */
+
+  // Malay greetings
+  if (
+    t === "hai" ||
+    t === "salam" ||
+    t === "assalamualaikum" ||
+    t === "assalamu alaikum"
+  ) {
+    return "ms";
+  }
+
+  // Mandarin greetings (romanized + native)
+  if (
+    t === "ni hao" ||
+    t === "你好" ||
+    t === "您好"
+  ) {
+    return "zh";
+  }
+
+  // Hindi greetings
+  if (
+    t === "namaste" ||
+    t === "namaskar" ||
+    t === "नमस्ते"
+  ) {
+    return "ta";
+  }
+
+  /* ========= CONTENT-BASED ========= */
+
+  // Malay keywords
+  if (
+    t.includes("bocor") ||
+    t.includes("rosak") ||
+    t.includes("tandas") ||
+    t.includes("lampu") ||
+    t.includes("tak") ||
+    t.includes("nak") ||
+    t.includes("tolong")
+  ) {
+    return "ms";
+  }
+
+  // Default → English
+  return "en";
 }
 
-/* ================= VOICE TRANSCRIPTION ================= */
+/* ================= DISPLAY TRANSLATION (RESIDENT UX) ================= */
+async function translateForResident(
+  englishText: string,
+  lang: Lang
+): Promise<string> {
+  if (!openai) return englishText;
+  if (lang === "en") return englishText;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+Translate the maintenance sentence into the user's language.
+
+Rules:
+- Keep meaning EXACT.
+- Do NOT add details.
+- Do NOT remove details.
+- Short, natural, human.
+- No emojis.
+- Output ONLY the translated sentence.
+          `
+        },
+        {
+          role: "user",
+          content: \`Language: \${lang}\nText: \${englishText}\`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || englishText;
+  } catch {
+    return englishText;
+  }
+}
+
+/* ================= AUTO REPLIES ================= */
+const AUTO_REPLIES = {
+  greeting: {
+    en: "Hi 👋 Please describe the issue you are facing.",
+    ms: "Hai 👋 Sila terangkan masalah yang anda hadapi.",
+    zh: "你好 👋 请描述您遇到的问题。",
+    ta: "வணக்கம் 👋 நீங்கள் எதிர்கொள்ளும் பிரச்சினையை விவரிக்கவும்."
+  },
+  ticketCreated: {
+    en: "✅ Your issue has been reported. We will assign a contractor shortly.",
+    ms: "✅ Aduan anda telah direkodkan. Kontraktor akan ditugaskan sebentar lagi.",
+    zh: "✅ 您的问题已记录。",
+    ta: "✅ உங்கள் புகார் பதிவு செய்யப்பட்டது."
+  },
+  duplicateNotice: {
+    en: "⚠️ A similar issue was reported earlier. We’ve linked your report.",
+    ms: "⚠️ Isu serupa telah dilaporkan sebelum ini.",
+    zh: "⚠️ 检测到类似问题，已为您关联。",
+    ta: "⚠️ இதே போன்ற பிரச்சினை முன்பு பதிவு செய்யப்பட்டுள்ளது."
+  }
+};
+
+/* ================= VOICE ================= */
 async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   if (!openai) return null;
 
@@ -154,12 +320,7 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
     if (!res.ok) return null;
 
     const buffer = await res.arrayBuffer();
-
-    const file = await toFile(
-      Buffer.from(buffer),
-      "voice",
-      { type: res.headers.get("content-type") || "application/octet-stream" }
-    );
+    const file = await toFile(Buffer.from(buffer), "voice");
 
     const transcript = await openai.audio.transcriptions.create({
       file,
@@ -172,7 +333,16 @@ async function transcribeVoice(mediaUrl: string): Promise<string | null> {
   }
 }
 
-/* ================= MESSAGE NORMALIZER ================= */
+/* ================= CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+  let t = text.toLowerCase();
+  t = t.replace(/\b(uh|um|ah|eh|lah|lor)\b/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= NORMALIZER ================= */
 async function normalizeIncomingMessage(body: any): Promise<string> {
   let text: string = body.description_raw || "";
 
@@ -182,35 +352,102 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
   }
 
   if (!text && body.image_url) {
-    text = "Photo evidence provided. Issue description pending.";
+    text = "Photo evidence provided.";
   }
 
   return cleanTranscript(text);
 }
 
+/* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  console.log("🚀 [HANDLER] Incoming request");
+
   if (req.method !== "POST") {
+    console.log("ℹ️ [HANDLER] Non-POST request ignored");
     return res.status(200).json({ ok: true });
   }
 
   try {
+    /* ================= 0. PARSE ================= */
+    console.log("🧩 [0] Parsing body");
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
+    console.log("🧩 [0] condo_id:", condo_id, "phone_number:", phone_number);
 
-    const description_raw = await normalizeIncomingMessage(body);
-    const description_clean = await aiCleanDescription(description_raw);
-
-    if (!condo_id || !phone_number || !description_raw) {
+    if (!condo_id || !phone_number) {
+      console.log("❌ [0] Missing required fields");
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ===== VERIFY RESIDENT ===== */
+    /* ================= 1. RAW MESSAGE ================= */
+    console.log("✉️ [1] Normalizing incoming message");
+    const description_raw = await normalizeIncomingMessage(body);
+    const description_clean = await aiCleanDescription(description_raw);
+
+    console.log("✉️ [1] description_raw:", description_raw);
+    console.log("✉️ [1] description_clean:", description_clean);
+
+    const rawText =
+      typeof body.description_raw === "string" ? body.description_raw : "";
+
+    const stripped = stripWhatsAppNoise(rawText);
+    const detectedLang = detectLanguage(stripped);
+
+    console.log("🌐 [1] rawText:", rawText);
+    console.log("🌐 [1] stripped:", stripped);
+    console.log("🌐 [1] detectedLang:", detectedLang);
+
+    /* ================= 2. FETCH OR CREATE SESSION ================= */
+    console.log("🗂️ [2] Fetching session");
+    let { data: session } = await supabase
+      .from("conversation_sessions")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!session) {
+      console.log("🆕 [2] Creating new session");
+      const { data } = await supabase
+        .from("conversation_sessions")
+        .insert({
+          condo_id,
+          phone_number,
+          state: "idle",
+          language: detectedLang
+        })
+        .select()
+        .single();
+
+      session = data;
+    }
+
+    if (!session || !session.id) {
+      console.log("❌ [2] Session invalid");
+      throw new Error("Session invalid");
+    }
+
+    console.log("🗂️ [2] Session state:", session.state);
+
+    async function updateSession(fields: Record<string, any>) {
+      console.log("📝 [SESSION UPDATE]", fields);
+      await supabase
+        .from("conversation_sessions")
+        .update({
+          ...fields,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", session.id);
+    }
+
+    /* ================= 3. VERIFY RESIDENT ================= */
+    console.log("👤 [3] Verifying resident");
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -219,33 +456,66 @@ export default async function handler(
       .maybeSingle();
 
     if (!resident || !resident.approved) {
+      console.log("❌ [3] Resident not approved");
       return res.status(403).json({
         error: "Phone number not approved by management"
       });
     }
 
     const unit_id = resident.unit_id;
+    console.log("👤 [3] Resident verified, unit_id:", unit_id);
 
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+    /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
+    console.log("👋 [4] Checking greeting/noise block");
+    if (session.state === "idle" && !hasProblemSignal(rawText)) {
+      console.log("🛑 [4] Greeting/noise detected, stopping flow");
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[detectedLang]
+      });
+    }
+
+    /* ================= 5. LANGUAGE LOCK ================= */
+    if (!session.language) {
+      console.log("🌐 [5] Locking language:", detectedLang);
+      await updateSession({ language: detectedLang });
+      session.language = detectedLang;
+    }
+
+    const lang = session.language as "en" | "ms" | "zh" | "ta";
+    console.log("🌐 [5] Active language:", lang);
+
+    /* ================= 6. INTENT DETECTION ================= */
+    console.log("🧠 [6] Intent detection");
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
 
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+    const t = description_clean.toLowerCase();
 
-    if (commonHit && unitHit) {
+    const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
+
+    console.log("🧠 [6] commonHit:", commonHit);
+    console.log("🧠 [6] unitHit:", unitHit);
+    console.log("🧠 [6] ambiguousHit:", ambiguousHit);
+
+    if (unitHit && commonHit) {
       intent_category = "mixed";
       intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
+    } else if (unitHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else if (commonHit) {
       intent_category = "common_area";
       intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
+    } else if (ambiguousHit) {
       intent_category = "unit";
       intent_source = "keyword";
     } else {
-      const ai = await aiClassify(description_raw);
+      const ai = await aiClassify(description_clean);
+      console.log("🧠 [6] AI result:", ai);
       if (ai.confidence >= 0.7) {
         intent_category = ai.category;
         intent_confidence = ai.confidence;
@@ -253,77 +523,126 @@ export default async function handler(
       }
     }
 
-    /* ===== CREATE TICKET ===== */
+    console.log("🧠 [6] intent_category:", intent_category);
+
+    /* ================= 7. CLARIFY → CONFIRM ================= */
+    if (session.state === "idle") {
+      console.log("✍️ [7] Entering confirm state");
+      await updateSession({
+        state: "confirm",
+        draft_description: description_clean
+      });
+
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            : lang === "zh"
+            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            : lang === "ta"
+            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+      });
+    }
+
+    /* ================= 8. EDIT FLOW ================= */
+    if (session.state === "confirm" && description_raw === "2") {
+      console.log("✏️ [8] User chose EDIT");
+      await updateSession({ state: "editing" });
+
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? "Baik 👍 Sila taip semula masalah anda."
+            : lang === "zh"
+            ? "好的 👍 请重新输入您的问题。"
+            : lang === "ta"
+            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
+            : "Okay 👍 Please retype your issue."
+      });
+    }
+
+    if (session.state === "editing") {
+      console.log("✏️ [8.1] Updating draft");
+      await updateSession({
+        state: "confirm",
+        draft_description: description_clean
+      });
+
+      return res.status(200).json({
+        reply:
+          lang === "ms"
+            ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
+            : lang === "zh"
+            ? `已更新草稿：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
+            : lang === "ta"
+            ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
+            : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+      });
+    }
+
+    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
+    console.log("🚨 [9] Execution gate reached");
+    console.log("🚨 [9] session.state:", session.state);
+    console.log("🚨 [9] description_raw:", description_raw);
+
+    if (session.state !== "confirm" || description_raw !== "1") {
+      console.log("⛔ [9] Execution blocked");
+      return res.status(200).json({
+        reply: AUTO_REPLIES.greeting[lang]
+      });
+    }
+
+    console.log("✅ [9] Creating ticket");
+
     const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         condo_id,
         unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
+        description_raw: session.draft_description,
+        description_clean: session.draft_description,
         source: "whatsapp",
         status: "new",
         is_common_area: intent_category === "common_area",
         intent_category,
-        intent_source,intent
+        intent_source,
         intent_confidence,
         diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
       .select()
       .single();
 
-    if (error || !ticket) throw error;
-
-    /* ===== EMBEDDING + DUPLICATE (RESTORED) ===== */
-    if (openai && description_clean) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_clean
-      });
-
-      const embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: ticket.unit_id,
-          ticket_is_common_area: ticket.is_common_area,
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
-
-      if (relation?.length) {
-        const r = relation[0];
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: r.relation_type === "hard_duplicate",
-            duplicate_of:
-              r.relation_type === "hard_duplicate"
-                ? r.related_ticket_id
-                : null,
-            related_to:
-              r.relation_type === "related"
-                ? r.related_ticket_id
-                : null
-          })
-          .eq("id", ticket.id);
-      }
+    if (error || !ticket) {
+      console.log("❌ [9] Ticket creation failed", error);
+      throw error;
     }
 
+    console.log("🧬 [9] Generating embedding");
+
+    const emb = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: session.draft_description
+    });
+
+    await supabase
+      .from("tickets")
+      .update({ embedding: emb.data[0].embedding })
+      .eq("id", ticket.id);
+
+    console.log("🔍 [9] Duplicate detection");
+
+    await updateSession({
+      state: "done",
+      current_ticket_id: ticket.id,
+      draft_description: null
+    });
+
+    console.log("✅ [9] Ticket completed:", ticket.id);
+
     return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      intent_category
+      reply: AUTO_REPLIES.ticketCreated[lang],
+      ticket_id: ticket.id
     });
 
   } catch (err: any) {
