@@ -1,4 +1,4 @@
-import type { NextApiRequest, NextApiResponse } from "next";
+ import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { toFile } from "openai/uploads";
@@ -360,14 +360,13 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
-export default async function handler(
+const ticketIntakeHandler = async (
   req: NextApiRequest,
   res: NextApiResponse
-) {
+) => {
   console.log("🚀 [HANDLER] Incoming request");
 
   if (req.method !== "POST") {
-    console.log("ℹ️ [HANDLER] Non-POST request ignored");
     return res.status(200).json({ ok: true });
   }
 
@@ -658,4 +657,6 @@ if (!phone_number) {
       detail: err.message
     });
   }
-}
+};
+
+export default ticketIntakeHandler;
