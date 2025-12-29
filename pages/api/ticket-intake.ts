@@ -103,6 +103,54 @@ async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
   }
 }
 
+/* ================= DETECT LANGUAGE ================= */
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+  const t = text.toLowerCase();
+
+  if (/[\u4e00-\u9fff]/.test(t)) return "zh"; // Chinese
+  if (/[\u0b80-\u0bff]/.test(t)) return "ta"; // Tamil
+
+  if (
+    t.includes("hai") ||
+    t.includes("selamat") ||
+    t.includes("terima kasih")
+  ) return "ms";
+
+  return "en";
+}
+
+/* ================= BANK GRADE REPLY GENERATOR ================= */
+function buildReplyText(
+  lang: "en" | "ms" | "zh" | "ta",
+  type: "greeting" | "confirmed",
+  ticketId?: string
+): string {
+  if (type === "greeting") {
+    switch (lang) {
+      case "zh":
+        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
+      case "ta":
+        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
+      case "ms":
+        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
+      default:
+        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
+    }
+  }
+
+  // confirmed
+  switch (lang) {
+    case "zh":
+      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
+    case "ta":
+      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
+    case "ms":
+      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
+    default:
+      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+}
+
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -255,7 +303,28 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
+    const lang = detectLanguage(description_raw);
+
+  /* ===== GREETING / NO-INTENT ===== */
+  if (isGreetingOnly(description_raw)) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(lang, "greeting")
+    });
+  }
+
+  const meaningful = await aiIsMeaningfulIssue(description_raw);
+  if (!meaningful) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(lang, "greeting")
+    });
+  }
+
     const description_clean = await aiCleanDescription(description_raw);
+
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -389,11 +458,13 @@ export default async function handler(
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      intent_category
-    });
+  return res.status(200).json({
+    success: true,
+    ticket_id: ticket.id,
+    intent_category,
+    reply_text: buildReplyText(lang, "confirmed", ticket.id)
+  });
+
 
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
