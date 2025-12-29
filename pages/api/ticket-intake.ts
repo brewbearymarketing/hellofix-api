@@ -263,6 +263,7 @@ export default async function handler(
         status: "new",
         is_common_area: intent_category === "common_area",
         intent_category,
+        intent_source,
         intent_confidence,
         diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
