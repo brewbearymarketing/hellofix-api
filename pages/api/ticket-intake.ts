@@ -1,3 +1,4 @@
+console.log("🔥 RUNNING: pages/api/ticket-intake.ts");
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
