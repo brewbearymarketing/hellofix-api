@@ -360,75 +360,42 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
 /* ================= API HANDLER (HANDLE ALL LOGIC LIKE WAITER IN RESTAURANT)================= */
 /* ================= API HANDLER ================= */
-const ticketIntakeHandler = async (
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
-) => {
-  console.log("🚀 [HANDLER] Incoming request");
+) {
+  const log = (step: string, data?: any) =>
+    console.log(`[${new Date().toISOString()}] ${step}`, data ?? "");
+
+  log("REQUEST_START");
 
   if (req.method !== "POST") {
+    log("NON_POST");
     return res.status(200).json({ ok: true });
   }
 
   try {
-    /* ================= 0. PARSE ================= */
-    console.log("🧩 [0] Parsing body");
+    /* 0. PARSE */
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
-    console.log("🧩 [0] condo_id:", condo_id, "phone_number:", phone_number);
+    log("PARSED_BODY", { condo_id, phone_number });
 
-    const phone_number =
-  body?.phone_number ??
-  body?.messages?.[0]?.from ??
-  body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from ??
-  null;
-
-if (!phone_number) {
-  console.warn("⚠️ No phone number found, ignoring webhook");
-  return res.status(200).json({ ok: true });
-}
-
-    /* ================= 1. VERIFY RESIDENT ================= */
-    console.log("👤 [3] Verifying resident");
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      console.log("❌ [3] Resident not approved");
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
+    if (!condo_id || !phone_number) {
+      log("MISSING_FIELDS");
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const unit_id = resident.unit_id;
-    console.log("👤 [3] Resident verified, unit_id:", unit_id);
-
-    /* ================= 2. RAW MESSAGE ================= */
-    console.log("✉️ [1] Normalizing incoming message");
+    /* 1. NORMALIZE */
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
+    log("TEXT", { description_raw, description_clean });
 
-    console.log("✉️ [1] description_raw:", description_raw);
-    console.log("✉️ [1] description_clean:", description_clean);
+    const detectedLang = detectLanguage(description_raw);
+    log("LANG_DETECTED", detectedLang);
 
-    const rawText =
-      typeof body.description_raw === "string" ? body.description_raw : "";
-
-    const stripped = stripWhatsAppNoise(rawText);
-    const detectedLang = detectLanguage(stripped);
-
-    console.log("🌐 [1] rawText:", rawText);
-    console.log("🌐 [1] stripped:", stripped);
-    console.log("🌐 [1] detectedLang:", detectedLang);
-
-    /* ================= 3. FETCH OR CREATE SESSION ================= */
-    console.log("🗂️ [2] Fetching session");
+    /* 2. SESSION */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -437,7 +404,7 @@ if (!phone_number) {
       .maybeSingle();
 
     if (!session) {
-      console.log("🆕 [2] Creating new session");
+      log("SESSION_CREATE");
       const { data } = await supabase
         .from("conversation_sessions")
         .insert({
@@ -448,184 +415,105 @@ if (!phone_number) {
         })
         .select()
         .single();
-
       session = data;
     }
 
-    if (!session || !session.id) {
-      console.log("❌ [2] Session invalid");
-      throw new Error("Session invalid");
-    }
+    if (!session) throw new Error("Session invalid");
+    log("SESSION_STATE", session.state);
 
-    console.log("🗂️ [2] Session state:", session.state);
-
-    async function updateSession(fields: Record<string, any>) {
-      console.log("📝 [SESSION UPDATE]", fields);
+    const updateSession = async (fields: any) => {
+      log("SESSION_UPDATE", fields);
       await supabase
         .from("conversation_sessions")
-        .update({
-          ...fields,
-          updated_at: new Date().toISOString()
-        })
+        .update({ ...fields, updated_at: new Date().toISOString() })
         .eq("id", session.id);
+    };
+
+    /* 3. RESIDENT */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident?.approved) {
+      log("RESIDENT_BLOCKED");
+      return res.status(403).json({ error: "Not approved" });
     }
 
-    /* ================= 4. GREETING / NOISE HARD BLOCK ================= */
-    console.log("👋 [4] Checking greeting/noise block");
-    if (session.state === "idle" && !hasProblemSignal(rawText)) {
-      console.log("🛑 [4] Greeting/noise detected, stopping flow");
+    /* 4. GREETING BLOCK (CLEAN TEXT ONLY) */
+    if (
+      session.state === "idle" &&
+      !hasProblemSignal(description_clean.toLowerCase())
+    ) {
+      log("GREETING_BLOCK");
       return res.status(200).json({
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    /* ================= 5. LANGUAGE LOCK ================= */
-    if (!session.language) {
-      console.log("🌐 [5] Locking language:", detectedLang);
-      await updateSession({ language: detectedLang });
-      session.language = detectedLang;
-    }
-
-    const lang = session.language as "en" | "ms" | "zh" | "ta";
-    console.log("🌐 [5] Active language:", lang);
-
-    /* ================= 6. INTENT DETECTION ================= */
-    console.log("🧠 [6] Intent detection");
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
-      "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const t = description_clean.toLowerCase();
-
-    const commonHit = keywordMatch(t, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(t, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(t, AMBIGUOUS_KEYWORDS);
-
-    console.log("🧠 [6] commonHit:", commonHit);
-    console.log("🧠 [6] unitHit:", unitHit);
-    console.log("🧠 [6] ambiguousHit:", ambiguousHit);
-
-    if (unitHit && commonHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (unitHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else if (commonHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_clean);
-      console.log("🧠 [6] AI result:", ai);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
-
-    console.log("🧠 [6] intent_category:", intent_category);
-
-    /* ================= 7. CLARIFY → CONFIRM ================= */
+    /* 5. CONFIRM */
     if (session.state === "idle") {
-      console.log("✍️ [7] Entering confirm state");
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
 
+      log("ASK_CONFIRM");
       return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? `Saya faham masalah berikut:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-            : lang === "zh"
-            ? `我理解的问题如下：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-            : lang === "ta"
-            ? `நான் புரிந்துகொண்ட பிரச்சனை:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-            : `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        reply: `I understood the issue as:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
 
-    /* ================= 8. EDIT FLOW ================= */
+    /* 6. EDIT */
     if (session.state === "confirm" && description_raw === "2") {
-      console.log("✏️ [8] User chose EDIT");
       await updateSession({ state: "editing" });
-
+      log("EDIT_REQUESTED");
       return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? "Baik 👍 Sila taip semula masalah anda."
-            : lang === "zh"
-            ? "好的 👍 请重新输入您的问题。"
-            : lang === "ta"
-            ? "சரி 👍 உங்கள் பிரச்சனையை மீண்டும் எழுதுங்கள்."
-            : "Okay 👍 Please retype your issue."
+        reply: "Okay 👍 Please retype your issue."
       });
     }
 
     if (session.state === "editing") {
-      console.log("✏️ [8.1] Updating draft");
       await updateSession({
         state: "confirm",
         draft_description: description_clean
       });
-
+      log("EDIT_UPDATED");
       return res.status(200).json({
-        reply:
-          lang === "ms"
-            ? `Kemaskini draf:\n\n"${description_clean}"\n\nBalas:\n1️⃣ Sahkan\n2️⃣ Edit`
-            : lang === "zh"
-            ? `已更新草稿：\n\n"${description_clean}"\n\n回复：\n1️⃣ 确认\n2️⃣ 编辑`
-            : lang === "ta"
-            ? `வரைவு புதுப்பிக்கப்பட்டது:\n\n"${description_clean}"\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ திருத்த`
-            : `Updated draft:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
+        reply: `Updated:\n\n"${description_clean}"\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit`
       });
     }
 
-    /* ================= 9. EXECUTE (CONFIRM ONLY) ================= */
-    console.log("🚨 [9] Execution gate reached");
-    console.log("🚨 [9] session.state:", session.state);
-    console.log("🚨 [9] description_raw:", description_raw);
-
+    /* 7. EXECUTE */
     if (session.state !== "confirm" || description_raw !== "1") {
-      console.log("⛔ [9] Execution blocked");
+      log("EXECUTION_BLOCKED", {
+        state: session.state,
+        input: description_raw
+      });
       return res.status(200).json({
-        reply: AUTO_REPLIES.greeting[lang]
+        reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
 
-    console.log("✅ [9] Creating ticket");
+    log("TICKET_CREATE");
 
-    const { data: ticket, error } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
       .insert({
         condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
+        unit_id: resident.unit_id,
         description_raw: session.draft_description,
         description_clean: session.draft_description,
         source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
+        status: "new"
       })
       .select()
       .single();
 
-    if (error || !ticket) {
-      console.log("❌ [9] Ticket creation failed", error);
-      throw error;
-    }
-
-    console.log("🧬 [9] Generating embedding");
-
-    const emb = await openai.embeddings.create({
+    /* 8. EMBEDDING */
+    const emb = await openai!.embeddings.create({
       model: "text-embedding-3-small",
       input: session.draft_description
     });
@@ -635,28 +523,23 @@ if (!phone_number) {
       .update({ embedding: emb.data[0].embedding })
       .eq("id", ticket.id);
 
-    console.log("🔍 [9] Duplicate detection");
-
     await updateSession({
       state: "done",
       current_ticket_id: ticket.id,
       draft_description: null
     });
 
-    console.log("✅ [9] Ticket completed:", ticket.id);
+    log("DONE", ticket.id);
 
     return res.status(200).json({
-      reply: AUTO_REPLIES.ticketCreated[lang],
+      reply: AUTO_REPLIES.ticketCreated[detectedLang],
       ticket_id: ticket.id
     });
-
   } catch (err: any) {
-    console.error("🔥 ERROR:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
-    });
+    console.error("FATAL", err);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
-};
+}
 
-export default ticketIntakeHandler;
+
+    
