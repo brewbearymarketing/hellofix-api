@@ -318,19 +318,44 @@ export default async function handler(
 
   try {
     /* ================= 0. PARSE ================= */
-    const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+const message =
+  body?.messages?.[0] ??
+  body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-    const { condo_id, phone_number } = body;
+const phone_number =
+  message?.from ??
+  body?.phone_number ??
+  null;
 
-    console.log("📦 BODY", body);
+const rawText =
+  message?.text?.body ??
+  body?.description_raw ??
+  "";
 
-    if (!condo_id || !phone_number) {
-      console.log("❌ MISSING condo_id / phone_number");
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+if (!phone_number) {
+  console.warn("⚠️ No phone number found, ignoring webhook");
+  return res.status(200).json({ ok: true });
+}
 
-    /* ================= 1. RAW MESSAGE ================= */
+   /* =================1. LOOKUP RESIDENT ================= */
+const { data: resident } = await supabase
+  .from("residents")
+  .select("condo_id, unit_id, approved")
+  .eq("phone_number", phone_number)
+  .maybeSingle();
+
+if (!resident || !resident.approved) {
+  console.warn("🚫 Phone not approved:", phone_number);
+  return res.status(200).json({
+    reply: "❌ Your number is not registered with management."
+  });
+}
+
+const condo_id = resident.condo_id;
+const unit_id = resident.unit_id;
+
+
+    /* ================= 2. RAW MESSAGE ================= */
     const description_raw = await normalizeIncomingMessage(body);
     const description_clean = await aiCleanDescription(description_raw);
 
@@ -342,7 +367,7 @@ export default async function handler(
 
     console.log("🌐 LANG:", detectedLang);
 
-    /* ================= 2. SESSION (FIRST) ================= */
+    /* ================= 3. SESSION (FIRST) ================= */
     let { data: session } = await supabase
       .from("conversation_sessions")
       .select("*")
@@ -379,7 +404,7 @@ export default async function handler(
         .eq("id", session.id);
     }
 
-    /* ================= 3. GREETING / NOISE BLOCK ================= */
+    /* ================= 4. GREETING / NOISE BLOCK ================= */
     if (
       session.state === "idle" &&
       !hasProblemSignal(description_raw)
@@ -389,21 +414,6 @@ export default async function handler(
         reply: AUTO_REPLIES.greeting[detectedLang]
       });
     }
-
-    /* ================= 4. VERIFY RESIDENT ================= */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      console.log("⛔ RESIDENT NOT APPROVED");
-      return res.status(403).json({ error: "Not approved" });
-    }
-
-    const unit_id = resident.unit_id;
 
     /* ================= 5. LANGUAGE LOCK ================= */
     if (!session.language) {
