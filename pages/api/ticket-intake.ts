@@ -110,6 +110,22 @@ async function checkThrottle(
   return { allowed: true, level: "ok" };
 }
 
+/* ================= THROTTLE NOTICE ================= */
+function buildThrottleNotice(
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  switch (lang) {
+    case "ms":
+      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
+    case "zh":
+      return "您发送消息过于频繁。请稍等片刻后再发送。";
+    case "ta":
+      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
+    default:
+      return "You are sending messages too quickly. Please wait a moment before sending another message.";
+  }
+}
+
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -447,13 +463,14 @@ export default async function handler(
     const throttle = await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
-      const tempLang = detectLanguage(description_raw);
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildReplyText(tempLang, "greeting")
-      });
-    }
+    const tempLang = detectLanguage(description_raw);
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildThrottleNotice(tempLang)
+    });
+  }
+
 
     if (throttle.level === "soft") {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
@@ -468,22 +485,32 @@ export default async function handler(
     }
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
-if (isGreetingOnly(description_raw)) {
-  // If already sent greeting in this throttle window → silent ignore
-  if (throttle.level !== "ok") {
+      if (isGreetingOnly(description_raw)) {
+    const tempLang = detectLanguage(description_raw);
+
+    if (throttle.level === "soft") {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reply_text: buildThrottleNotice(tempLang)
+      });
+    }
+
+    if (throttle.level === "blocked") {
+      return res.status(200).json({
+        success: true,
+        ignored: true
+      });
+    }
+
+    // First greeting only
     return res.status(200).json({
       success: true,
-      ignored: true
+      ignored: true,
+      reply_text: buildReplyText(tempLang, "greeting")
     });
   }
 
-  const tempLang = detectLanguage(description_raw);
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: buildReplyText(tempLang, "greeting")
-  });
-}
 
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
