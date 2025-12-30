@@ -24,13 +24,11 @@ const THROTTLE_BLOCK_MINUTES = 5;
 async function checkThrottle(
   condo_id: string,
   phone_number: string
-)
-Promise<{
+): Promise<{
   allowed: boolean;
   level: "ok" | "soft" | "blocked";
   count: number;
-}>
-{    
+}> {
   const now = new Date();
 
   const { data, error } = await supabase
@@ -40,23 +38,30 @@ Promise<{
     .eq("phone_number", phone_number)
     .maybeSingle();
 
-  if (error) return { allowed: true, level: "ok" };
+  // Fail open
+  if (error) {
+    return { allowed: true, level: "ok", count: 1 };
+  }
 
-  // No record → create with explicit state
+  // First message
   if (!data) {
     await supabase.from("message_throttle").insert({
       condo_id,
       phone_number,
       message_count: 1,
-      first_seen_at: now,
-      updated_at: now
+      first_seen_at: now
     });
+
     return { allowed: true, level: "ok", count: 1 };
   }
 
-  // Blocked
+  // Hard blocked
   if (data.blocked_until && new Date(data.blocked_until) > now) {
-    return { allowed: true, level: "ok", count: 1 };
+    return {
+      allowed: false,
+      level: "blocked",
+      count: data.message_count
+    };
   }
 
   const windowStart = new Date(data.first_seen_at);
@@ -77,9 +82,9 @@ Promise<{
     return { allowed: true, level: "ok", count: 1 };
   }
 
-  const newCount = (data.message_count ?? 0) + 1;
+  const newCount = data.message_count + 1;
 
-  // Hard limit → block
+  // Hard limit
   if (newCount > THROTTLE_HARD_LIMIT) {
     const blockedUntil = new Date(
       now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
@@ -94,10 +99,14 @@ Promise<{
       })
       .eq("id", data.id);
 
-    return { allowed: false, level: "blocked" };
+    return {
+      allowed: false,
+      level: "blocked",
+      count: newCount
+    };
   }
 
-  // Soft limit → warning
+  // Soft / normal
   await supabase
     .from("message_throttle")
     .update({
@@ -106,11 +115,11 @@ Promise<{
     })
     .eq("id", data.id);
 
-  if (newCount > THROTTLE_SOFT_LIMIT) {
-    return { allowed: true, level: "soft" };
-  }
-
-  return { allowed: true, level: "ok" };
+  return {
+    allowed: true,
+    level: newCount > THROTTLE_SOFT_LIMIT ? "soft" : "ok",
+    count: newCount
+  };
 }
 
 /* ================= THROTTLE NOTICE ================= */
