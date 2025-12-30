@@ -400,70 +400,60 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    
+    /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
+    let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
-      // Hard block → silent ignore
+      const tempLang = detectLanguage(description_raw);
       return res.status(200).json({
         success: true,
         ignored: true,
-        reply_text: buildReplyText(lang, "greeting")
+        reply_text: buildReplyText(tempLang, "greeting")
       });
     }
 
     if (throttle.level === "soft") {
+      const meaningful = await aiIsMeaningfulIssue(description_raw);
+      if (!meaningful) {
+        const tempLang = detectLanguage(description_raw);
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          reply_text: buildReplyText(tempLang, "greeting")
+        });
+      }
+    }
+
+    /* ===== GREETING SHORT-CIRCUIT ===== */
+    if (isGreetingOnly(description_raw)) {
+      const tempLang = detectLanguage(description_raw);
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reply_text: buildReplyText(tempLang, "greeting")
+      });
+    }
+
+       /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
+    const tempLang = detectLanguage(description_raw);
     return res.status(200).json({
       success: true,
       ignored: true,
-      reply_text:
-        lang === "ms"
-          ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
-          : lang === "zh"
-          ? "请稍等片刻再发送消息。"
-          : lang === "ta"
-          ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
-          : "Please wait a moment before sending another message."
+      reply_text: buildReplyText(tempLang, "greeting")
     });
   }
 
-  // Meaningful message → allow through despite soft throttle
-}
+    /* ===== COMPLAINT CONFIRMED → LANGUAGE LOCKED HERE ===== */
+      lang = detectLanguage(description_raw);
 
-    /* ===== GREETING GUARD (USE EXISTING FUNCTION) ===== */
-if (isGreetingOnly(description_raw)) {
-  // Greeting decides temporary language
-  lang = detectLanguage(description_raw);
-
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: buildReplyText(lang, "greeting")
-  });
-}
-
-    /* ===== GREETING / NO-INTENT (ONCE) ===== */
-    const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
-
-  if (!hasMeaningfulIntent) {
-    // Non-greeting junk → fallback to greeting UX in detected language
-    lang = detectLanguage(description_raw);
-
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(lang, "greeting")
-    });
-    }
-
-/* ===== COMPLAINT CONFIRMED → LANGUAGE LOCKED HERE ===== */
-lang = detectLanguage(description_raw);
-
-    const description_clean = await aiCleanDescription(description_raw);
+        const description_clean = await aiCleanDescription(description_raw);
     
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
