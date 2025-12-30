@@ -404,15 +404,14 @@ export default async function handler(
     }
     
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
-  const throttle = await checkThrottle(condo_id, phone_number);
+    const throttle = await checkThrottle(condo_id, phone_number);
 
-  /* HARD BLOCK → SILENT */
   if (throttle.level === "blocked") {
     return res.status(200).json({ ignored: true });
   }
 
-  /* GREETING */
-  if (isGreetingOnly(text)) {
+  /* ===== GREETING ===== */
+  if (isGreetingOnly(description_raw)) {
     if (throttle.level !== "ok") {
       return res.status(200).json({ ignored: true });
     }
@@ -423,8 +422,8 @@ export default async function handler(
     });
   }
 
-  /* MEANINGFUL CHECK */
-  const meaningful = await aiIsMeaningfulIssue(text);
+  /* ===== MEANINGFUL CHECK ===== */
+  const meaningful = await aiIsMeaningfulIssue(description_raw);
 
   if (!meaningful) {
     if (throttle.level !== "ok") {
@@ -436,8 +435,6 @@ export default async function handler(
       reply_text: greetingReply("en")
     });
   }
-
-  /* SOFT THROTTLE BUT MEANINGFUL → ALLOW */
 
     /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
     const lang = await aiDetectLanguage(text);
