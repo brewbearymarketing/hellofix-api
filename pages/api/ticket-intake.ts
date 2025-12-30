@@ -17,94 +17,60 @@ console.log("OPENAI ENABLED:", !!openai);
 
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
-const THROTTLE_SOFT_LIMIT = 5;
-const THROTTLE_HARD_LIMIT = 8;
-const THROTTLE_BLOCK_MINUTES = 5;
+const THROTTLE_SOFT_LIMIT = 3;
+const THROTTLE_HARD_LIMIT = 6;
 
-async function checkThrottle(
-  condo_id: string,
-  phone_number: string
-): Promise<{
-  allowed: boolean;
-  level: "ok" | "soft" | "blocked";
-}> {
+async function checkThrottle(condo_id: string, phone_number: string) {
   const now = new Date();
 
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from("message_throttle")
     .select("*")
     .eq("condo_id", condo_id)
     .eq("phone_number", phone_number)
     .maybeSingle();
 
-  if (error) return { allowed: true, level: "ok" };
-
-  // No record → create
   if (!data) {
     await supabase.from("message_throttle").insert({
       condo_id,
-      phone_number
+      phone_number,
+      message_count: 1,
+      first_seen_at: now
     });
-    return { allowed: true, level: "ok" };
+    return { level: "ok" as const, count: 1 };
   }
 
-  // Blocked
-  if (data.blocked_until && new Date(data.blocked_until) > now) {
-    return { allowed: false, level: "blocked" };
-  }
+  const diff =
+    (now.getTime() - new Date(data.first_seen_at).getTime()) / 1000;
 
-  const windowStart = new Date(data.first_seen_at);
-  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
-
-  // Window expired → reset
-  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
+  if (diff > THROTTLE_WINDOW_SECONDS) {
     await supabase
       .from("message_throttle")
       .update({
         message_count: 1,
-        first_seen_at: now,
-        blocked_until: null,
-        updated_at: now
+        first_seen_at: now
       })
       .eq("id", data.id);
 
-    return { allowed: true, level: "ok" };
+    return { level: "ok" as const, count: 1 };
   }
 
   const newCount = data.message_count + 1;
 
-  // Hard limit → block
-  if (newCount > THROTTLE_HARD_LIMIT) {
-    const blockedUntil = new Date(
-      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
-    );
-
-    await supabase
-      .from("message_throttle")
-      .update({
-        message_count: newCount,
-        blocked_until: blockedUntil,
-        updated_at: now
-      })
-      .eq("id", data.id);
-
-    return { allowed: false, level: "blocked" };
-  }
-
-  // Soft limit → warning
   await supabase
     .from("message_throttle")
-    .update({
-      message_count: newCount,
-      updated_at: now
-    })
+    .update({ message_count: newCount })
     .eq("id", data.id);
 
-  if (newCount > THROTTLE_SOFT_LIMIT) {
-    return { allowed: true, level: "soft" };
+  if (newCount > THROTTLE_HARD_LIMIT) {
+    return { level: "blocked" as const, count: newCount };
   }
 
-  return { allowed: true, level: "ok" };
+  if (newCount > THROTTLE_SOFT_LIMIT) {
+    return { level: "soft" as const, count: newCount };
+  }
+
+  return { level: "ok" as const, count: newCount };
 }
 
 /* ================= KEYWORDS ================= */
@@ -437,67 +403,46 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
     
-    /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-    let lang: "en" | "ms" | "zh" | "ta" | null = null;
-
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
-    const throttle = await checkThrottle(condo_id, phone_number);
+  const throttle = await checkThrottle(condo_id, phone_number);
 
-    if (!throttle.allowed) {
-      const tempLang = detectLanguage(description_raw);
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildReplyText(tempLang, "greeting")
-      });
-    }
-
-    if (throttle.level === "soft") {
-      const meaningful = await aiIsMeaningfulIssue(description_raw);
-      if (!meaningful) {
-        const tempLang = detectLanguage(description_raw);
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          reply_text: buildReplyText(tempLang, "greeting")
-        });
-      }
-    }
-
-    /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
-if (isGreetingOnly(description_raw)) {
-  // If already sent greeting in this throttle window → silent ignore
-  if (throttle.level !== "ok") {
-    return res.status(200).json({
-      success: true,
-      ignored: true
-    });
+  /* HARD BLOCK → SILENT */
+  if (throttle.level === "blocked") {
+    return res.status(200).json({ ignored: true });
   }
 
-  const tempLang = detectLanguage(description_raw);
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: buildReplyText(tempLang, "greeting")
-  });
-}
+  /* GREETING */
+  if (isGreetingOnly(text)) {
+    if (throttle.level !== "ok") {
+      return res.status(200).json({ ignored: true });
+    }
 
-       /* ===== MEANINGFUL INTENT CHECK ===== */
-  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
-
-  if (!hasMeaningfulIntent) {
-    const tempLang = detectLanguage(description_raw);
     return res.status(200).json({
-      success: true,
       ignored: true,
-      reply_text: buildReplyText(tempLang, "greeting")
+      reply_text: greetingReply("en")
     });
   }
+
+  /* MEANINGFUL CHECK */
+  const meaningful = await aiIsMeaningfulIssue(text);
+
+  if (!meaningful) {
+    if (throttle.level !== "ok") {
+      return res.status(200).json({ ignored: true });
+    }
+
+    return res.status(200).json({
+      ignored: true,
+      reply_text: greetingReply("en")
+    });
+  }
+
+  /* SOFT THROTTLE BUT MEANINGFUL → ALLOW */
 
     /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
-    lang = await aiDetectLanguage(description_raw);
+    const lang = await aiDetectLanguage(text);
 
-        const description_clean = await aiCleanDescription(description_raw);
+    const description_clean = await aiCleanDescription(description_raw);
     
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
