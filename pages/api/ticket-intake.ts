@@ -413,12 +413,13 @@ export default async function handler(
   /* ===== GREETING ===== */
   if (isGreetingOnly(description_raw)) {
     if (throttle.level !== "ok") {
+      const tempLang = detectLanguage(description_raw);
       return res.status(200).json({ ignored: true });
     }
 
     return res.status(200).json({
       ignored: true,
-      reply_text: greetingReply("en")
+      reply_text: buildReplyText(tempLang, "greeting")
     });
   }
 
@@ -432,12 +433,12 @@ export default async function handler(
 
     return res.status(200).json({
       ignored: true,
-      reply_text: greetingReply("en")
+      reply_text: buildReplyText(tempLang, "greeting")
     });
   }
 
     /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
-    const lang = await aiDetectLanguage(text);
+    const lang = await aiDetectLanguage(description_raw);
 
     const description_clean = await aiCleanDescription(description_raw);
     
