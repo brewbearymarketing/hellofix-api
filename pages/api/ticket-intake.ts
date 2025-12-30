@@ -435,15 +435,13 @@ export default async function handler(
 }
 
     /* ===== GREETING / NO-INTENT (ONCE) ===== */
-    if (isGreetingOnly(description_raw)) {
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildReplyText(lang, "greeting")
-      });
-    }
-
     const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
+
+    /* 🔑 IMPORTANT FIX: LANGUAGE DECIDED HERE */
+    const lang = hasMeaningfulIntent
+      ? detectLanguage(description_raw)
+      : detectLanguage(description_raw);
+
     if (!hasMeaningfulIntent) {
       return res.status(200).json({
         success: true,
@@ -451,8 +449,6 @@ export default async function handler(
         reply_text: buildReplyText(lang, "greeting")
       });
     }
-
-    const description_clean = await aiCleanDescription(description_raw);
 
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
