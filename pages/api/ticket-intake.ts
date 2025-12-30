@@ -397,74 +397,56 @@ export default async function handler(
     const description_raw = await normalizeIncomingMessage(body);
     const lang = detectLanguage(description_raw);
 
-  /* ===== GREETING / NO-INTENT ===== */
-  if (isGreetingOnly(description_raw)) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(lang, "greeting")
-    });
-  }
-
-  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
-  if (!hasMeaningfulIntent) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(lang, "greeting")
-    });
-  }
-
-    const description_clean = await aiCleanDescription(description_raw);
-
-
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ===== GREETING / NO-INTENT GUARD ===== */
+    /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
+    const throttle = await checkThrottle(condo_id, phone_number);
+
+    if (!throttle.allowed) {
+      // Hard block → silent ignore
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reply_text: buildReplyText(lang, "greeting")
+      });
+    }
+
+    if (throttle.level === "soft") {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reply_text:
+          lang === "ms"
+            ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
+            : lang === "zh"
+            ? "请稍等片刻再发送消息。"
+            : lang === "ta"
+            ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
+            : "Please wait a moment before sending another message."
+      });
+    }
+
+    /* ===== GREETING / NO-INTENT (ONCE) ===== */
     if (isGreetingOnly(description_raw)) {
       return res.status(200).json({
         success: true,
         ignored: true,
-        reason: "Greeting / non-actionable message"
+        reply_text: buildReplyText(lang, "greeting")
       });
     }
 
-    const meaningful = await aiIsMeaningfulIssue(description_raw);
-    if (!meaningful) {
+    const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
+    if (!hasMeaningfulIntent) {
       return res.status(200).json({
         success: true,
         ignored: true,
-        reason: "No maintenance intent detected"
+        reply_text: buildReplyText(lang, "greeting")
       });
     }
 
-    /* ===== ABUSE / SPAM THROTTLING ===== */
-const throttle = await checkThrottle(condo_id, phone_number);
-
-if (!throttle.allowed) {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: buildReplyText(lang, "greeting")
-  });
-}
-
-if (throttle.level === "soft") {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text:
-      lang === "ms"
-        ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
-        : lang === "zh"
-        ? "请稍等片刻再发送消息。"
-        : lang === "ta"
-        ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
-        : "Please wait a moment before sending another message."
-  });
-}
+    const description_clean = await aiCleanDescription(description_raw);
 
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -483,7 +465,8 @@ if (throttle.level === "soft") {
     const unit_id = resident.unit_id;
 
     /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
     let intent_source: "keyword" | "ai" | "none" = "none";
     let intent_confidence = 1;
 
@@ -576,14 +559,12 @@ if (throttle.level === "soft") {
       }
     }
 
-  return res.status(200).json({
-    success: true,
-    ticket_id: ticket.id,
-    intent_category,
-    reply_text: buildReplyText(lang, "confirmed", ticket.id)
-  });
-
-
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
+      intent_category,
+      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+    });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
