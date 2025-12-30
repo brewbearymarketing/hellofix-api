@@ -464,15 +464,23 @@ export default async function handler(
       }
     }
 
-    /* ===== GREETING SHORT-CIRCUIT ===== */
-    if (isGreetingOnly(description_raw)) {
-      const tempLang = detectLanguage(description_raw);
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildReplyText(tempLang, "greeting")
-      });
-    }
+    /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
+if (isGreetingOnly(description_raw)) {
+  // If already sent greeting in this throttle window → silent ignore
+  if (throttle.level !== "ok") {
+    return res.status(200).json({
+      success: true,
+      ignored: true
+    });
+  }
+
+  const tempLang = detectLanguage(description_raw);
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildReplyText(tempLang, "greeting")
+  });
+}
 
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
