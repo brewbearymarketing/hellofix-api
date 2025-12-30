@@ -24,10 +24,13 @@ const THROTTLE_BLOCK_MINUTES = 5;
 async function checkThrottle(
   condo_id: string,
   phone_number: string
-): Promise<{
+)
+Promise<{
   allowed: boolean;
   level: "ok" | "soft" | "blocked";
-}> {
+  count: number;
+}>
+{    
   const now = new Date();
 
   const { data, error } = await supabase
@@ -48,12 +51,12 @@ async function checkThrottle(
       first_seen_at: now,
       updated_at: now
     });
-    return { allowed: true, level: "ok" };
+    return { allowed: true, level: "ok", count: 1 };
   }
 
   // Blocked
   if (data.blocked_until && new Date(data.blocked_until) > now) {
-    return { allowed: false, level: "blocked" };
+    return { allowed: true, level: "ok", count: 1 };
   }
 
   const windowStart = new Date(data.first_seen_at);
@@ -71,7 +74,7 @@ async function checkThrottle(
       })
       .eq("id", data.id);
 
-    return { allowed: true, level: "ok" };
+    return { allowed: true, level: "ok", count: 1 };
   }
 
   const newCount = (data.message_count ?? 0) + 1;
@@ -485,25 +488,11 @@ export default async function handler(
     }
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
-      if (isGreetingOnly(description_raw)) {
-    const tempLang = detectLanguage(description_raw);
+    if (isGreetingOnly(description_raw)) {
+  const tempLang = detectLanguage(description_raw);
 
-    if (throttle.level === "soft") {
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildThrottleNotice(tempLang)
-      });
-    }
-
-    if (throttle.level === "blocked") {
-      return res.status(200).json({
-        success: true,
-        ignored: true
-      });
-    }
-
-    // First greeting only
+  // First message only → greeting
+  if (throttle.count === 1) {
     return res.status(200).json({
       success: true,
       ignored: true,
@@ -511,7 +500,21 @@ export default async function handler(
     });
   }
 
+  // Second message → explicit throttle warning
+  if (throttle.count === 2) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildThrottleNotice(tempLang)
+    });
+  }
 
+  // After that → silent
+  return res.status(200).json({
+    success: true,
+    ignored: true
+  });
+}
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
