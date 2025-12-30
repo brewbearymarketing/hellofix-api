@@ -211,6 +211,43 @@ function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   return "en";
 }
 
+/* ================= AI LANGUAGE DETECTOR ================= */
+async function aiDetectLanguage(
+  text: string
+): Promise<"en" | "ms" | "zh" | "ta"> {
+  if (!openai) return "en";
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Detect the primary language of the message. " +
+            "Reply ONLY JSON: {\"lang\": \"en\"|\"ms\"|\"zh\"|\"ta\"}. " +
+            "Malay = ms. Ignore greetings."
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    if (["en", "ms", "zh", "ta"].includes(obj.lang)) {
+      return obj.lang;
+    }
+
+    return "en";
+  } catch {
+    return "en";
+  }
+}
+
+
 /* ================= BANK GRADE REPLY GENERATOR ================= */
 function buildReplyText(
   lang: "en" | "ms" | "zh" | "ta",
@@ -449,8 +486,8 @@ export default async function handler(
     });
   }
 
-    /* ===== COMPLAINT CONFIRMED → LANGUAGE LOCKED HERE ===== */
-      lang = detectLanguage(description_raw);
+    /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
+    lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
     
