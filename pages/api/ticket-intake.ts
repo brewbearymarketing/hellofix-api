@@ -414,19 +414,25 @@ export default async function handler(
     }
 
     if (throttle.level === "soft") {
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text:
-          lang === "ms"
-            ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
-            : lang === "zh"
-            ? "请稍等片刻再发送消息。"
-            : lang === "ta"
-            ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
-            : "Please wait a moment before sending another message."
-      });
-    }
+  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
+
+  if (!hasMeaningfulIntent) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
+          : lang === "zh"
+          ? "请稍等片刻再发送消息。"
+          : lang === "ta"
+          ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
+          : "Please wait a moment before sending another message."
+    });
+  }
+
+  // Meaningful message → allow through despite soft throttle
+}
 
     /* ===== GREETING / NO-INTENT (ONCE) ===== */
     if (isGreetingOnly(description_raw)) {
