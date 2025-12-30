@@ -15,6 +15,98 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
+/* ================= ABUSE / SPAM THROTTLING ================= */
+const THROTTLE_WINDOW_SECONDS = 60;
+const THROTTLE_SOFT_LIMIT = 5;
+const THROTTLE_HARD_LIMIT = 8;
+const THROTTLE_BLOCK_MINUTES = 5;
+
+async function checkThrottle(
+  condo_id: string,
+  phone_number: string
+): Promise<{
+  allowed: boolean;
+  level: "ok" | "soft" | "blocked";
+}> {
+  const now = new Date();
+
+  const { data, error } = await supabase
+    .from("message_throttle")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  if (error) return { allowed: true, level: "ok" };
+
+  // No record → create
+  if (!data) {
+    await supabase.from("message_throttle").insert({
+      condo_id,
+      phone_number
+    });
+    return { allowed: true, level: "ok" };
+  }
+
+  // Blocked
+  if (data.blocked_until && new Date(data.blocked_until) > now) {
+    return { allowed: false, level: "blocked" };
+  }
+
+  const windowStart = new Date(data.first_seen_at);
+  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
+
+  // Window expired → reset
+  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: 1,
+        first_seen_at: now,
+        blocked_until: null,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return { allowed: true, level: "ok" };
+  }
+
+  const newCount = data.message_count + 1;
+
+  // Hard limit → block
+  if (newCount > THROTTLE_HARD_LIMIT) {
+    const blockedUntil = new Date(
+      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
+    );
+
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: newCount,
+        blocked_until: blockedUntil,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return { allowed: false, level: "blocked" };
+  }
+
+  // Soft limit → warning
+  await supabase
+    .from("message_throttle")
+    .update({
+      message_count: newCount,
+      updated_at: now
+    })
+    .eq("id", data.id);
+
+  if (newCount > THROTTLE_SOFT_LIMIT) {
+    return { allowed: true, level: "soft" };
+  }
+
+  return { allowed: true, level: "ok" };
+}
+
 /* ================= KEYWORDS ================= */
 const COMMON_AREA_KEYWORDS = [
   "lobby","lift","elevator","parking","corridor","staircase",
@@ -347,6 +439,32 @@ export default async function handler(
         reason: "No maintenance intent detected"
       });
     }
+
+    /* ===== ABUSE / SPAM THROTTLING ===== */
+const throttle = await checkThrottle(condo_id, phone_number);
+
+if (!throttle.allowed) {
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildReplyText(lang, "greeting")
+  });
+}
+
+if (throttle.level === "soft") {
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text:
+      lang === "ms"
+        ? "Sila tunggu sebentar sebelum menghantar mesej seterusnya."
+        : lang === "zh"
+        ? "请稍等片刻再发送消息。"
+        : lang === "ta"
+        ? "தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்."
+        : "Please wait a moment before sending another message."
+  });
+}
 
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
