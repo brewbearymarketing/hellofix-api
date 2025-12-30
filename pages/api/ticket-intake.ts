@@ -395,7 +395,6 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
-    let lang = "en" as "en" | "ms" | "zh" | "ta";
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
