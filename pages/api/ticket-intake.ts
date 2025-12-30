@@ -419,6 +419,7 @@ export default async function handler(
 
     return res.status(200).json({
       ignored: true,
+      const tempLang = detectLanguage(description_raw);
       reply_text: buildReplyText(tempLang, "greeting")
     });
   }
@@ -428,11 +429,13 @@ export default async function handler(
 
   if (!meaningful) {
     if (throttle.level !== "ok") {
+      const tempLang = detectLanguage(description_raw);
       return res.status(200).json({ ignored: true });
     }
 
     return res.status(200).json({
       ignored: true,
+      const tempLang = detectLanguage(description_raw);
       reply_text: buildReplyText(tempLang, "greeting")
     });
   }
