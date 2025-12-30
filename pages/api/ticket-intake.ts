@@ -395,7 +395,7 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
-    let lang = detectLanguage(description_raw);
+    let lang = "en" as "en" | "ms" | "zh" | "ta";
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -434,17 +434,34 @@ export default async function handler(
   // Meaningful message → allow through despite soft throttle
 }
 
+    /* ===== GREETING GUARD (USE EXISTING FUNCTION) ===== */
+if (isGreetingOnly(description_raw)) {
+  // Greeting decides temporary language
+  lang = detectLanguage(description_raw);
+
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildReplyText(lang, "greeting")
+  });
+}
+
     /* ===== GREETING / NO-INTENT (ONCE) ===== */
     const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
-    /* 🔑 IMPORTANT FIX: LANGUAGE DECIDED HERE */
-    if (!hasMeaningfulIntent) {
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text: buildReplyText(lang, "greeting")
-      });
+  if (!hasMeaningfulIntent) {
+    // Non-greeting junk → fallback to greeting UX in detected language
+    lang = detectLanguage(description_raw);
+
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(lang, "greeting")
+    });
     }
+
+/* ===== COMPLAINT CONFIRMED → LANGUAGE LOCKED HERE ===== */
+lang = detectLanguage(description_raw);
 
     const description_clean = await aiCleanDescription(description_raw);
     
