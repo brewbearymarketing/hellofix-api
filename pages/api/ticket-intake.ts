@@ -395,7 +395,7 @@ export default async function handler(
     const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
-    const lang = detectLanguage(description_raw);
+    let lang = detectLanguage(description_raw);
 
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -438,10 +438,6 @@ export default async function handler(
     const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
     /* 🔑 IMPORTANT FIX: LANGUAGE DECIDED HERE */
-    const lang = hasMeaningfulIntent
-      ? detectLanguage(description_raw)
-      : detectLanguage(description_raw);
-
     if (!hasMeaningfulIntent) {
       return res.status(200).json({
         success: true,
