@@ -446,6 +446,8 @@ export default async function handler(
       });
     }
 
+    const description_clean = await aiCleanDescription(description_raw);
+    
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
