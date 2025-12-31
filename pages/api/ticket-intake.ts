@@ -479,7 +479,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
     if (transcript) text = transcript;
   }
 
-  if (!text && body.image_url) {
+  if (!text && body.media_url) {
     text = "Photo evidence provided. Issue description pending.";
   }
 
@@ -499,7 +499,7 @@ export default async function handler(
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { condo_id, phone_number, image_url, video_url } = body;
+    const { condo_id, phone_number, media_url} = body;
 
     const description_raw = await normalizeIncomingMessage(body);
 
@@ -674,12 +674,9 @@ export default async function handler(
       .from("tickets")
       .update({
         description_raw,
-        images: body.image_url
-          ? [...(draft.images || []), body.image_url]
-          : draft.images,
-        videos: body.video_url
-          ? [...(draft.videos || []), body.video_url]
-          : draft.videos
+        media: body.media ?? null
+          ? [...(draft.media || []), body.media_url]
+          : draft.media,
       })
       .eq("id", draft.id);
 
@@ -705,8 +702,7 @@ export default async function handler(
       intent_source,
       intent_confidence,
       diagnosis_fee: intent_category === "unit" ? 30 : 0,
-      images: body.image_url ? [body.image_url] : [],
-      videos: body.video_url ? [body.video_url] : []
+      media: body.media_url ? [body.media_url] : [],
     })
     .select()
     .single();
