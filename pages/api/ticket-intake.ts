@@ -774,12 +774,13 @@ export default async function handler(
       })
       .eq("id", draft.id);
 
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      const tempLang : lang ?? detectLanguage(description_raw);
-      reply_text: buildDraftPrompt(tempLang)
-    });
+   const tempLang = lang !== null ? lang : detectLanguage(description_raw);
+
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildDraftPrompt(tempLang)
+  });
   }
 
       /* ===== CREATE TICKET ===== */
