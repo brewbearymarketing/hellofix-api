@@ -128,13 +128,13 @@ function buildThrottleNotice(
 ): string {
   switch (lang) {
     case "ms":
-      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
+      return "⚠️ Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
     case "zh":
-      return "您发送消息过于频繁。请稍等片刻后再发送。";
+      return "⚠️ 您发送消息过于频繁。请稍等片刻后再发送。";
     case "ta":
-      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
+      return "⚠️ நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
     default:
-      return "You are sending messages too quickly. Please wait a moment before sending another message.";
+      return "⚠️ You are sending messages too quickly. Please wait a moment before sending another message.";
   }
 }
 
@@ -288,13 +288,13 @@ function buildReplyText(
   if (type === "greeting") {
     switch (lang) {
       case "zh":
-        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
+        return "👋 您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
       case "ta":
-        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
+        return "👋 வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
       case "ms":
-        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
+        return "👋 Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
       default:
-        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
+        return "👋 Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
     }
   }
 
