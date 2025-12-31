@@ -801,8 +801,8 @@ if (isEditing) {
     })
     .eq("condo_id", condo_id)
     .eq("phone_number", phone_number);
+     .eq("id", draft.id);
 }
-      .eq("id", draft.id);
 
 const tempLang = lang ?? detectLanguage(description_raw);
 
