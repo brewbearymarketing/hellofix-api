@@ -350,6 +350,35 @@ function buildDraftPrompt(lang: "en" | "ms" | "zh" | "ta") {
   }
 }
 
+/* ================= SINGLE REPLY SINK (ANTI-DUPLICATE) ================= */
+async function replyAndExit(
+  res: NextApiResponse,
+  params: {
+    condo_id: string;
+    phone_number: string;
+    reply_text: string;
+    success?: boolean;
+    ignored?: boolean;
+    ticket_id?: string;
+  }
+) {
+  const { condo_id, phone_number, reply_text } = params;
+
+  await sendReplyOnce({
+    condo_id,
+    phone_number,
+    reply_text
+  });
+
+  return res.status(200).json({
+    success: params.success ?? true,
+    ignored: params.ignored ?? false,
+    ticket_id: params.ticket_id,
+    reply_text
+  });
+}
+
+
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -491,15 +520,23 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  
   if (req.method !== "POST") {
     return res.status(200).json({ ok: true });
   }
 
   try {
-    const body =
+     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { condo_id, phone_number, media_url} = body;
+     const { condo_id, phone_number, media_url} = body;
+
+     const { data: session } = await supabase
+    .from("conversation_sessions")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
 
     const description_raw = await normalizeIncomingMessage(body);
 
@@ -527,11 +564,14 @@ export default async function handler(
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
         const tempLang = detectLanguage(description_raw);
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          reply_text: buildReplyText(tempLang, "greeting")
-        });
+        
+        const reply = buildReplyText(tempLang, "greeting");
+
+    return replyAndExit(res, {
+    condo_id,
+    phone_number,
+    reply_text: reply
+    });
       }
     }
 
@@ -541,20 +581,24 @@ export default async function handler(
 
   // First message only → greeting
   if (throttle.count === 1) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(tempLang, "greeting")
-    });
+    const reply = buildReplyText(lang, "greeting");
+
+  return replyAndExit(res, {
+    condo_id,
+    phone_number,
+    reply_text: reply
+  });
   }
 
   // Second message → explicit throttle warning
   if (throttle.count === 2) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildThrottleNotice(tempLang)
-    });
+    const reply = buildThrottleNotice(tempLang);
+
+  return replyAndExit(res, {
+    condo_id,
+    phone_number,
+    reply_text: reply
+  });
   }
 
   // After that → silent
@@ -568,17 +612,28 @@ export default async function handler(
 
   if (!hasMeaningfulIntent) {
     const tempLang = detectLanguage(description_raw);
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(tempLang, "greeting")
-    });
+    const reply = buildReplyText(tempLang, "greeting");
+
+   return replyAndExit(res, {
+    condo_id,
+    phone_number,
+    reply_text: reply
+  });
   }
 
     /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
-    lang = await aiDetectLanguage(description_raw);
+    lang = session?.language ?? await aiDetectLanguage(description_raw);
 
-        const description_clean = await aiCleanDescription(description_raw);
+    if (!session?.language) {
+      await supabase.from("conversation_sessions").upsert({
+      condo_id,
+      phone_number,
+      language: lang,
+      updated_at: new Date()
+    });
+    }
+
+    const description_clean = await aiCleanDescription(description_raw);
     
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -636,22 +691,27 @@ export default async function handler(
     .maybeSingle();
 
   if (draft) {
+    
     // CONFIRM
-    if (isConfirmMessage(description_raw)) {
-      await supabase
-        .from("tickets")
-        .update({
-          status: "new",
-          confirmed_at: new Date()
-        })
-        .eq("id", draft.id);
+  if (isConfirmMessage(description_raw)) {
+  await supabase
+    .from("tickets")
+    .update({
+      status: "new",
+      confirmed_at: new Date()
+    })
+    .eq("id", draft.id);
 
-      return res.status(200).json({
-        success: true,
-        ticket_id: draft.id,
-        reply_text: buildReplyText(lang, "confirmed", draft.id)
-      });
-    }
+  const reply = buildReplyText(lang!, "confirmed", draft.id);
+
+  return replyAndExit(res, {
+    condo_id,
+    phone_number,
+    ticket_id: draft.id,
+    reply_text: reply
+    });
+  }
+
 
     // EDIT
     if (isEditMessage(description_raw)) {
