@@ -770,7 +770,7 @@ export default async function handler(
       success: true,
       ticket_id: ticket.id,
       intent_category,
-      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+      reply_text: buildReplyText(lang ?? "en", "confirmed", ticket.id)
     });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
