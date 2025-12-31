@@ -614,7 +614,8 @@ export default async function handler(
 
   // First message only → greeting
   if (throttle.count === 1) {
-    const reply = buildReplyText(lang, "greeting");
+    const tempLang = detectLanguage(description_raw);
+    const reply = buildReplyText(tempLang, "greeting");
 
   return replyAndExit(res, {
     condo_id,
