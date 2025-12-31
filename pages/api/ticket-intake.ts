@@ -752,38 +752,65 @@ export default async function handler(
 
 
     // EDIT
-    if (isEditMessage(description_raw)) {
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reply_text:
-          lang === "ms"
-            ? "Sila hantar penerangan baharu."
-            : lang === "zh"
-            ? "请发送新的问题描述。"
-            : lang === "ta"
-            ? "புதிய விளக்கத்தை அனுப்பவும்."
-            : "Please send the updated description."
-      });
-    }
+if (isEditMessage(description_raw)) {
+  // mark session as editing
+  await supabase
+    .from("conversation_sessions")
+    .upsert({
+      condo_id,
+      phone_number,
+      editing_draft: true,
+      updated_at: new Date()
+    });
 
-    // Update draft text or media
-    await supabase
-      .from("tickets")
-      .update({
-        description_raw,
-        media: body.media ?? null
-          ? [...(draft.media || []), body.media_url]
-          : draft.media,
-      })
-      .eq("id", draft.id);
+  const reply =
+    lang === "ms"
+      ? "✏️ Sila hantar penerangan baharu untuk aduan ini."
+      : lang === "zh"
+      ? "✏️ 请发送新的问题描述。"
+      : lang === "ta"
+      ? "✏️ புதிய விளக்கத்தை அனுப்பவும்."
+      : "✏️ Please send the updated description.";
 
-   return replyAndExit(res, {
+  return replyAndExit(res, {
     condo_id,
     phone_number,
-    ignored: true,
-    reply_text: buildDraftPrompt(getSafeLang())
+    reply_text: reply
   });
+}
+
+    // Update draft text or media
+const isEditing = session?.editing_draft === true;
+
+await supabase
+  .from("tickets")
+  .update({
+    description_raw: isEditing ? description_raw : draft.description_raw,
+    media: body.media_url
+      ? [...(draft.media || []), body.media_url]
+      : draft.media,
+  })
+  .eq("id", draft.id);
+
+// clear editing flag
+if (isEditing) {
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      editing_draft: false
+    })
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number);
+}
+      .eq("id", draft.id);
+
+const tempLang = lang ?? detectLanguage(description_raw);
+
+return replyAndExit(res, {
+  condo_id,
+  phone_number,
+  reply_text: buildDraftPrompt(tempLang)
+});
     }
 
       /* ===== CREATE TICKET ===== */
