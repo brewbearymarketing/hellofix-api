@@ -777,7 +777,7 @@ export default async function handler(
     return res.status(200).json({
       success: true,
       ignored: true,
-      const tempLang = lang ?? detectLanguage(description_raw);
+      const tempLang : lang ?? detectLanguage(description_raw);
       reply_text: buildDraftPrompt(tempLang)
     });
   }
