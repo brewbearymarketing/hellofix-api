@@ -311,43 +311,29 @@ function buildReplyText(
   }
 }
 
-/* ================= DRAFT COMMAND HELPERS ================= */
+/* ================= RESIDENT FLOW REPLY ================= */
+function buildPreviewText(
+  lang: "en" | "ms" | "zh" | "ta",
+  ticket: any
+): string {
+  const fee = ticket.is_common_area ? "RM0" : "RM30";
 
-function isOption(text: string, n: "1" | "2" | "3") {
-  return text.trim() === n;
-}
+  const body = `
+I understood the issue as:
 
-function buildDraftMenu(lang: "en" | "ms" | "zh" | "ta") {
-  switch (lang) {
-    case "ms":
-      return (
-        "✍️ Sila semak aduan anda:\n\n" +
-        "1️⃣ Ubah penerangan\n" +
-        "2️⃣ Hantar gambar / video\n" +
-        "3️⃣ Sahkan & hantar"
-      );
-    case "zh":
-      return (
-        "✍️ 请确认您的投诉：\n\n" +
-        "1️⃣ 修改描述\n" +
-        "2️⃣ 发送照片 / 视频\n" +
-        "3️⃣ 确认并提交"
-      );
-    case "ta":
-      return (
-        "✍️ உங்கள் புகாரை சரிபார்க்கவும்:\n\n" +
-        "1️⃣ விளக்கத்தை மாற்று\n" +
-        "2️⃣ புகைப்படம் / வீடியோ அனுப்பு\n" +
-        "3️⃣ உறுதி செய்து சமர்ப்பி"
-      );
-    default:
-      return (
-        "✍️ Please review your complaint:\n\n" +
-        "1️⃣ Edit description\n" +
-        "2️⃣ Add photo / video\n" +
-        "3️⃣ Confirm & submit"
-      );
-  }
+1️⃣ Issue: ${ticket.description_clean}
+2️⃣ Category: ${ticket.is_common_area ? "Common Area" : "Your Unit"}
+3️⃣ Estimated fee: ${fee}
+
+Reply with:
+1️⃣ Confirm & submit
+2️⃣ Edit issue text
+3️⃣ Change category
+4️⃣ Add photo
+5️⃣ Cancel
+`.trim();
+
+  return body;
 }
 
 
@@ -511,6 +497,22 @@ export default async function handler(
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
+        /* ===== VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
+
+    const unit_id = resident.unit_id;
+
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
@@ -580,102 +582,146 @@ export default async function handler(
     lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
-    
-    /* ===== VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
 
-    if (!resident || !resident.approved) {
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
-    }
+      /* ===== CREATE/UPDATE CONVERSATION SESSION ===== */
+  await supabase
+  .from("conversation_sessions")
+  .upsert({
+    condo_id,
+    phone_number,
+    current_ticket_id: ticket.id,
+    state: "preview",
+    language: lang,
+    last_message: description_raw,
+    last_reply: "preview"
+  }, {
+    onConflict: "condo_id,phone_number"
+  });
 
-    const unit_id = resident.unit_id;
-
-    /* ===== HANDLE EXISTING DRAFT ===== */
-const { data: draft } = await supabase
-  .from("tickets")
+    const { data: session } = await supabase
+  .from("conversation_sessions")
   .select("*")
   .eq("condo_id", condo_id)
-  .eq("unit_id", unit_id)
-  .eq("status", "draft")
-  .order("created_at", { ascending: false })
-  .limit(1)
+  .eq("phone_number", phone_number)
   .maybeSingle();
 
-if (draft) {
-  const activeLang = lang ?? detectLanguage(description_raw);
+if (session && session.state === "preview") {
+  const choice = description_raw.trim();
 
-  // OPTION 1 — EDIT
-  if (isOption(description_raw, "1")) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        activeLang === "ms"
-          ? "Sila hantar penerangan baharu."
-          : activeLang === "zh"
-          ? "请发送新的问题描述。"
-          : activeLang === "ta"
-          ? "புதிய விளக்கத்தை அனுப்பவும்."
-          : "Please send the updated description."
-    });
-  }
-
-  // OPTION 2 — PHOTO / VIDEO
-  if (isOption(description_raw, "2")) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        activeLang === "ms"
-          ? "Sila hantar gambar atau video sekarang."
-          : activeLang === "zh"
-          ? "请现在发送照片或视频。"
-          : activeLang === "ta"
-          ? "இப்போது புகைப்படம் அல்லது வீடியோ அனுப்பவும்."
-          : "Please send the photo or video now."
-    });
-  }
-
-  // OPTION 3 — CONFIRM
-  if (isOption(description_raw, "3")) {
+  // 1️⃣ CONFIRM
+  if (choice === "1") {
     await supabase
       .from("tickets")
       .update({
-        status: "draft",
-        confirmed_at: new Date()
+        awaiting_user_reply: false,
+        status: "open"
       })
-      .eq("id", draft.id);
+      .eq("id", session.current_ticket_id);
+
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "confirmed" })
+      .eq("id", session.id);
 
     return res.status(200).json({
       success: true,
-      ticket_id: draft.id,
-      reply_text: buildDraftMenu(lang)
+      reply_text: buildReplyText(session.language, "confirmed", session.current_ticket_id)
     });
   }
 
-  // UPDATE DRAFT (text or media)
+  // 2️⃣ EDIT
+  if (choice === "2") {
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "editing" })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text: "Please retype the issue description."
+    });
+  }
+
+  // 3️⃣ CHANGE CATEGORY
+  if (choice === "3") {
+    const { data: t } = await supabase
+      .from("tickets")
+      .select("*")
+      .eq("id", session.current_ticket_id)
+      .single();
+
+    const isCommon = !t.is_common_area;
+
+    await supabase
+      .from("tickets")
+      .update({
+        is_common_area: isCommon,
+        unit_id: isCommon ? null : t.unit_id,
+        diagnosis_fee: isCommon ? 0 : 30
+      })
+      .eq("id", t.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text: buildPreviewText(session.language, {
+        ...t,
+        is_common_area: isCommon
+      })
+    });
+  }
+
+  // 4️⃣ ADD PHOTO
+  if (choice === "4") {
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "awaiting_photo" })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text: "Please send a photo of the issue."
+    });
+  }
+
+  // 5️⃣ CANCEL
+  if (choice === "5") {
+    await supabase
+      .from("tickets")
+      .update({ status: "cancelled" })
+      .eq("id", session.current_ticket_id);
+
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "cancelled" })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text: "Report cancelled. No ticket was submitted."
+    });
+  }
+}
+
+    /* ===== PHOTO RECEIVE LOGIC ===== */
+    if (session?.state === "awaiting_photo" && body.image_url) {
   await supabase
     .from("tickets")
     .update({
-      description_raw:
-        description_raw.length > 3 ? description_raw : draft.description_raw,
-      media: body.image_url
-        ? [...(draft.media || []), body.image_url]
-        : draft.media
+      images: supabase.rpc("jsonb_insert", {
+        target: "images",
+        value: body.image_url
+      })
     })
-    .eq("id", draft.id);
+    .eq("id", session.current_ticket_id);
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "preview" })
+    .eq("id", session.id);
 
   return res.status(200).json({
     success: true,
-    ignored: true,
-    reply_text: buildDraftMenu(activeLang)
+    reply_text: "Photo received.\nReply 1️⃣ to confirm or 2️⃣ to edit."
   });
 }
 
@@ -716,12 +762,13 @@ if (draft) {
         description_raw,
         description_clean,
         source: "whatsapp",
-        status: "draft",
+        status: "new",
         is_common_area: intent_category === "common_area",
         intent_category,
         intent_source,
         intent_confidence,
         diagnosis_fee: intent_category === "unit" ? 30 : 0
+        awaiting_user_reply: true,
       })
       .select()
       .single();
@@ -775,11 +822,13 @@ if (draft) {
     }
 
     return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      intent_category,
-      reply_text: buildReplyText(lang, "confirmed", ticket.id)
-    });
+  success: true,
+  ticket_id: ticket.id,
+  intent_category,
+  awaiting_confirmation: true,
+  reply_text: buildPreviewText(lang, ticket)
+});
+
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
