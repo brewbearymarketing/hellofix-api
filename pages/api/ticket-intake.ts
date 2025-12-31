@@ -298,6 +298,18 @@ function buildReplyText(
     }
   }
 
+    // confirmed
+  switch (lang) {
+    case "zh":
+      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
+    case "ta":
+      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
+    case "ms":
+      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
+    default:
+      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+
   // confirmed
   switch (lang) {
     case "zh":
@@ -308,6 +320,33 @@ function buildReplyText(
       return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
     default:
       return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+}
+
+/* ================= DRAFT HELPERS ================= */
+
+function isConfirmMessage(text: string) {
+  return ["confirm", "yes", "submit", "ok confirm"].includes(
+    text.toLowerCase().trim()
+  );
+}
+
+function isEditMessage(text: string) {
+  return ["edit", "change", "update"].includes(
+    text.toLowerCase().trim()
+  );
+}
+
+function buildDraftPrompt(lang: "en" | "ms" | "zh" | "ta") {
+  switch (lang) {
+    case "ms":
+      return "✍️ Sila semak aduan anda.\nBalas EDIT untuk ubah.\nHantar GAMBAR/VIDEO jika ada.\nBalas CONFIRM untuk hantar.";
+    case "zh":
+      return "✍️ 请确认您的投诉。\n回复 EDIT 修改。\n发送 照片/视频（如有）。\n回复 CONFIRM 提交。";
+    case "ta":
+      return "✍️ உங்கள் புகாரை சரிபார்க்கவும்.\nEDIT என்றால் திருத்தலாம்.\nபுகைப்படம்/வீடியோ இருந்தால் அனுப்பவும்.\nCONFIRM என்று பதிலளிக்கவும்.";
+    default:
+      return "✍️ Please review your complaint.\nReply EDIT to change.\nSend PHOTO/VIDEO if any.\nReply CONFIRM to submit.";
   }
 }
 
@@ -460,7 +499,7 @@ export default async function handler(
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { condo_id, phone_number } = body;
+    const { condo_id, phone_number, image_url, video_url } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
 
@@ -585,26 +624,100 @@ export default async function handler(
       }
     }
 
-    /* ===== CREATE TICKET ===== */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
-      })
-      .select()
-      .single();
+      /* ===== HANDLE EXISTING DRAFT ===== */
+  const { data: draft } = await supabase
+    .from("tickets")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .eq("unit_id", unit_id)
+    .eq("status", "draft")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    if (error || !ticket) throw error;
+  if (draft) {
+    // CONFIRM
+    if (isConfirmMessage(description_raw)) {
+      await supabase
+        .from("tickets")
+        .update({
+          status: "new",
+          confirmed_at: new Date()
+        })
+        .eq("id", draft.id);
+
+      return res.status(200).json({
+        success: true,
+        ticket_id: draft.id,
+        reply_text: buildReplyText(lang, "confirmed", draft.id)
+      });
+    }
+
+    // EDIT
+    if (isEditMessage(description_raw)) {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reply_text:
+          lang === "ms"
+            ? "Sila hantar penerangan baharu."
+            : lang === "zh"
+            ? "请发送新的问题描述。"
+            : lang === "ta"
+            ? "புதிய விளக்கத்தை அனுப்பவும்."
+            : "Please send the updated description."
+      });
+    }
+
+    // Update draft text or media
+    await supabase
+      .from("tickets")
+      .update({
+        description_raw,
+        images: body.image_url
+          ? [...(draft.images || []), body.image_url]
+          : draft.images,
+        videos: body.video_url
+          ? [...(draft.videos || []), body.video_url]
+          : draft.videos
+      })
+      .eq("id", draft.id);
+
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildDraftPrompt(lang)
+    });
+  }
+
+      /* ===== CREATE TICKET ===== */
+    const { data: ticket, error } = await supabase
+    .from("tickets")
+    .insert({
+      condo_id,
+      unit_id: intent_category === "unit" ? unit_id : null,
+      description_raw,
+      description_clean,
+      source: "whatsapp",
+      status: "draft", // 🔑 DRAFT
+      is_common_area: intent_category === "common_area",
+      intent_category,
+      intent_source,
+      intent_confidence,
+      diagnosis_fee: intent_category === "unit" ? 30 : 0,
+      images: body.image_url ? [body.image_url] : [],
+      videos: body.video_url ? [body.video_url] : []
+    })
+    .select()
+    .single();
+
+  if (error || !ticket) throw error;
+
+  return res.status(200).json({
+    success: true,
+    ticket_id: ticket.id,
+    reply_text: buildDraftPrompt(lang)
+  });
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
