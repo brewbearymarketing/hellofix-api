@@ -583,7 +583,57 @@ export default async function handler(
 
         const description_clean = await aiCleanDescription(description_raw);
 
-      /* ===== CREATE/UPDATE CONVERSATION SESSION ===== */
+    /* ===== INTENT DETECTION ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
+
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
+
+    /* ===== CREATE TICKET ===== */
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
+        awaiting_user_reply: true,
+      })
+      .select()
+      .single();
+
+    if (error || !ticket) throw error;
+
+       /* ===== CREATE/UPDATE CONVERSATION SESSION ===== */
   await supabase
   .from("conversation_sessions")
   .upsert({
@@ -598,6 +648,7 @@ export default async function handler(
     onConflict: "condo_id,phone_number"
   });
 
+    /* ===== NUMBER SELECTION HANDLER ===== */
     const { data: session } = await supabase
   .from("conversation_sessions")
   .select("*")
@@ -702,7 +753,7 @@ if (session && session.state === "preview") {
   }
 }
 
-    /* ===== PHOTO RECEIVE LOGIC ===== */
+      /* ===== PHOTO RECEIVE LOGIC ===== */
     if (session?.state === "awaiting_photo" && body.image_url) {
   await supabase
     .from("tickets")
@@ -724,56 +775,6 @@ if (session && session.state === "preview") {
     reply_text: "Photo received.\nReply 1️⃣ to confirm or 2️⃣ to edit."
   });
 }
-
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
-      "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
-
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
-
-    /* ===== CREATE TICKET ===== */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
-        awaiting_user_reply: true,
-      })
-      .select()
-      .single();
-
-    if (error || !ticket) throw error;
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
