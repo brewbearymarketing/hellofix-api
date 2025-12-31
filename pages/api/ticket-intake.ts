@@ -494,6 +494,14 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
     
+ /* ===== SESSION LOOKUP ===== */
+        const { data: session } = await supabase
+  .from("conversation_sessions")
+  .select("*")
+  .eq("condo_id", condo_id)
+  .eq("phone_number", phone_number)
+  .maybeSingle();
+    
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
@@ -512,6 +520,44 @@ export default async function handler(
     }
 
     const unit_id = resident.unit_id;
+
+        /* ===== HARD-INTERCEPT session BEFORE ANY GREETING CHECK ===== */
+    if (session) {
+  const msg = description_raw.trim();
+
+  // PREVIEW STATE → NUMBER MENU
+  if (session.state === "preview") {
+    if (["1","2","3","4","5"].includes(msg)) {
+      // handle confirm / edit / change / photo / cancel
+      // MUST return response
+    }
+
+    // ❗ Any other input is invalid during preview
+    return res.status(200).json({
+      success: true,
+      reply_text: "Please reply with 1, 2, 3, 4, or 5."
+    });
+  }
+
+  // EDITING STATE → ACCEPT FREE TEXT
+  if (session.state === "editing") {
+    // accept new description
+    // update ticket
+    // move back to preview
+    // return preview
+  }
+
+  // AWAITING PHOTO → ONLY ACCEPT IMAGE
+  if (session.state === "awaiting_photo") {
+    if (!body.image_url) {
+      return res.status(200).json({
+        success: true,
+        reply_text: "Please send a photo of the issue."
+      });
+    }
+    // attach photo, return preview
+  }
+}
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
@@ -647,15 +693,8 @@ export default async function handler(
   }, {
     onConflict: "condo_id,phone_number"
   });
-
-    /* ===== NUMBER SELECTION HANDLER ===== */
-    const { data: session } = await supabase
-  .from("conversation_sessions")
-  .select("*")
-  .eq("condo_id", condo_id)
-  .eq("phone_number", phone_number)
-  .maybeSingle();
-
+    
+  /* ===== NUMBER SELECTION HANDLER ===== */
 if (session && session.state === "preview") {
   const choice = description_raw.trim();
 
