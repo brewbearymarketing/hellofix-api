@@ -350,6 +350,39 @@ function buildDraftPrompt(lang: "en" | "ms" | "zh" | "ta") {
   }
 }
 
+/* ================= DUPLICATE REPLY GUARD ================= */ 
+async function sendReplyOnce(params: { 
+condo_id: string; 
+phone_number: string; 
+reply_text: string; 
+}) {
+const { condo_id, phone_number, reply_text } = params; 
+
+const { data: session } = await supabase 
+.from("conversation_sessions") 
+.select("last_message") 
+.eq("condo_id", condo_id) 
+.eq("phone_number", phone_number) 
+.maybeSingle(); 
+
+// 🚫 Same reply as last time → DO NOTHING 
+if (session?.last_message === reply_text) { 
+return { sent: false }; 
+}
+
+// ✅ Save last reply 
+await supabase 
+.from("conversation_sessions") 
+.upsert({ 
+condo_id, 
+phone_number, 
+last_message: reply_text, 
+updated_at: new Date() 
+}); 
+
+return { sent: true }; 
+}
+
 /* ================= SINGLE REPLY SINK (ANTI-DUPLICATE) ================= */
 async function replyAndExit(
   res: NextApiResponse,
