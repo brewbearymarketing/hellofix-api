@@ -721,6 +721,7 @@ export default async function handler(
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
+     const ai = openai; // 🔑 tell TypeScript this is non-null
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_clean
