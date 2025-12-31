@@ -805,10 +805,12 @@ export default async function handler(
 
   if (error || !ticket) throw error;
 
+  const tempLang = lang !== null ? lang : detectLanguage(description_raw);
+
   return res.status(200).json({
     success: true,
     ticket_id: ticket.id,
-    reply_text: buildDraftPrompt(lang)
+    reply_text: buildDraftPrompt(tempLang)
   });
 
     /* ===== EMBEDDING + DUPLICATE ===== */
