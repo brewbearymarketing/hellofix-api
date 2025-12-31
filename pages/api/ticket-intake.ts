@@ -580,6 +580,10 @@ export default async function handler(
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
+    function getSafeLang() {
+    return lang !== null ? lang : detectLanguage(description_raw);
+    }
+
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
@@ -736,7 +740,7 @@ export default async function handler(
     })
     .eq("id", draft.id);
 
-  const reply = buildReplyText(lang!, "confirmed", draft.id);
+  const reply = buildReplyText(getSafeLang(), "confirmed", draft.id);
 
   return replyAndExit(res, {
     condo_id,
@@ -774,14 +778,13 @@ export default async function handler(
       })
       .eq("id", draft.id);
 
-   const tempLang = lang !== null ? lang : detectLanguage(description_raw);
-
-  return res.status(200).json({
-    success: true,
+   return replyAndExit(res, {
+    condo_id,
+    phone_number,
     ignored: true,
-    reply_text: buildDraftPrompt(tempLang)
+    reply_text: buildDraftPrompt(getSafeLang())
   });
-  }
+    }
 
       /* ===== CREATE TICKET ===== */
     const { data: ticket, error } = await supabase
@@ -807,11 +810,12 @@ export default async function handler(
 
   const tempLang = lang !== null ? lang : detectLanguage(description_raw);
 
-  return res.status(200).json({
-    success: true,
-    ticket_id: ticket.id,
-    reply_text: buildDraftPrompt(tempLang)
-  });
+return replyAndExit(res, {
+  condo_id,
+  phone_number,
+  ticket_id: ticket.id,
+  reply_text: buildDraftPrompt(getSafeLang())
+});
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
@@ -864,7 +868,7 @@ export default async function handler(
       success: true,
       ticket_id: ticket.id,
       intent_category,
-      reply_text: buildReplyText(lang ?? "en", "confirmed", ticket.id)
+      reply_text: buildReplyText(getSafeLang(), "confirmed", ticket.id)
     });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
