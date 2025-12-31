@@ -128,13 +128,13 @@ function buildThrottleNotice(
 ): string {
   switch (lang) {
     case "ms":
-      return "⚠️ Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
+      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
     case "zh":
-      return "⚠️ 您发送消息过于频繁。请稍等片刻后再发送。";
+      return "您发送消息过于频繁。请稍等片刻后再发送。";
     case "ta":
-      return "⚠️ நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
+      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
     default:
-      return "⚠️ You are sending messages too quickly. Please wait a moment before sending another message.";
+      return "You are sending messages too quickly. Please wait a moment before sending another message.";
   }
 }
 
@@ -288,26 +288,14 @@ function buildReplyText(
   if (type === "greeting") {
     switch (lang) {
       case "zh":
-        return "👋 您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
+        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
       case "ta":
-        return "👋 வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
+        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
       case "ms":
-        return "👋 Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
+        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
       default:
-        return "👋 Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
+        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
     }
-  }
-
-    // confirmed
-  switch (lang) {
-    case "zh":
-      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
-    case "ta":
-      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
-    case "ms":
-      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
-    default:
-      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
   }
 
   // confirmed
@@ -323,92 +311,43 @@ function buildReplyText(
   }
 }
 
-/* ================= DRAFT HELPERS ================= */
+/* ================= DRAFT COMMAND HELPERS ================= */
 
-function isConfirmMessage(text: string) {
-  return ["confirm", "yes", "submit", "ok confirm"].includes(
-    text.toLowerCase().trim()
-  );
+function isOption(text: string, n: "1" | "2" | "3") {
+  return text.trim() === n;
 }
 
-function isEditMessage(text: string) {
-  return ["edit", "change", "update"].includes(
-    text.toLowerCase().trim()
-  );
-}
-
-function buildDraftPrompt(lang: "en" | "ms" | "zh" | "ta") {
+function buildDraftMenu(lang: "en" | "ms" | "zh" | "ta") {
   switch (lang) {
     case "ms":
-      return "✍️ Sila semak aduan anda.\nBalas EDIT untuk ubah.\nHantar GAMBAR/VIDEO jika ada.\nBalas CONFIRM untuk hantar.";
+      return (
+        "✍️ Sila semak aduan anda:\n\n" +
+        "1️⃣ Ubah penerangan\n" +
+        "2️⃣ Hantar gambar / video\n" +
+        "3️⃣ Sahkan & hantar"
+      );
     case "zh":
-      return "✍️ 请确认您的投诉。\n回复 EDIT 修改。\n发送 照片/视频（如有）。\n回复 CONFIRM 提交。";
+      return (
+        "✍️ 请确认您的投诉：\n\n" +
+        "1️⃣ 修改描述\n" +
+        "2️⃣ 发送照片 / 视频\n" +
+        "3️⃣ 确认并提交"
+      );
     case "ta":
-      return "✍️ உங்கள் புகாரை சரிபார்க்கவும்.\nEDIT என்றால் திருத்தலாம்.\nபுகைப்படம்/வீடியோ இருந்தால் அனுப்பவும்.\nCONFIRM என்று பதிலளிக்கவும்.";
+      return (
+        "✍️ உங்கள் புகாரை சரிபார்க்கவும்:\n\n" +
+        "1️⃣ விளக்கத்தை மாற்று\n" +
+        "2️⃣ புகைப்படம் / வீடியோ அனுப்பு\n" +
+        "3️⃣ உறுதி செய்து சமர்ப்பி"
+      );
     default:
-      return "✍️ Please review your complaint.\nReply EDIT to change.\nSend PHOTO/VIDEO if any.\nReply CONFIRM to submit.";
+      return (
+        "✍️ Please review your complaint:\n\n" +
+        "1️⃣ Edit description\n" +
+        "2️⃣ Add photo / video\n" +
+        "3️⃣ Confirm & submit"
+      );
   }
-}
-
-/* ================= DUPLICATE REPLY GUARD ================= */ 
-async function sendReplyOnce(params: { 
-condo_id: string; 
-phone_number: string; 
-reply_text: string; 
-}) {
-const { condo_id, phone_number, reply_text } = params; 
-
-const { data: session } = await supabase 
-.from("conversation_sessions") 
-.select("last_message") 
-.eq("condo_id", condo_id) 
-.eq("phone_number", phone_number) 
-.maybeSingle(); 
-
-// 🚫 Same reply as last time → DO NOTHING 
-if (session?.last_message === reply_text) { 
-return { sent: false }; 
-}
-
-// ✅ Save last reply 
-await supabase 
-.from("conversation_sessions") 
-.upsert({ 
-condo_id, 
-phone_number, 
-last_message: reply_text, 
-updated_at: new Date() 
-}); 
-
-return { sent: true }; 
-}
-
-/* ================= SINGLE REPLY SINK (ANTI-DUPLICATE) ================= */
-async function replyAndExit(
-  res: NextApiResponse,
-  params: {
-    condo_id: string;
-    phone_number: string;
-    reply_text: string;
-    success?: boolean;
-    ignored?: boolean;
-    ticket_id?: string;
-  }
-) {
-  const { condo_id, phone_number, reply_text } = params;
-
-  await sendReplyOnce({
-    condo_id,
-    phone_number,
-    reply_text
-  });
-
-  return res.status(200).json({
-    success: params.success ?? true,
-    ignored: params.ignored ?? false,
-    ticket_id: params.ticket_id,
-    reply_text
-  });
 }
 
 
@@ -541,7 +480,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
     if (transcript) text = transcript;
   }
 
-  if (!text && body.media_url) {
+  if (!text && body.image_url) {
     text = "Photo evidence provided. Issue description pending.";
   }
 
@@ -553,23 +492,15 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  
   if (req.method !== "POST") {
     return res.status(200).json({ ok: true });
   }
 
   try {
-     const body =
+    const body =
       typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-     const { condo_id, phone_number, media_url} = body;
-
-     const { data: session } = await supabase
-    .from("conversation_sessions")
-    .select("*")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
+    const { condo_id, phone_number } = body;
 
     const description_raw = await normalizeIncomingMessage(body);
 
@@ -579,10 +510,6 @@ export default async function handler(
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
-
-    function getSafeLang() {
-    return lang !== null ? lang : detectLanguage(description_raw);
-    }
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
@@ -601,14 +528,11 @@ export default async function handler(
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
         const tempLang = detectLanguage(description_raw);
-        
-        const reply = buildReplyText(tempLang, "greeting");
-
-    return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    reply_text: reply
-    });
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          reply_text: buildReplyText(tempLang, "greeting")
+        });
       }
     }
 
@@ -618,25 +542,20 @@ export default async function handler(
 
   // First message only → greeting
   if (throttle.count === 1) {
-    const tempLang = detectLanguage(description_raw);
-    const reply = buildReplyText(tempLang, "greeting");
-
-  return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    reply_text: reply
-  });
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(tempLang, "greeting")
+    });
   }
 
   // Second message → explicit throttle warning
   if (throttle.count === 2) {
-    const reply = buildThrottleNotice(tempLang);
-
-  return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    reply_text: reply
-  });
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildThrottleNotice(tempLang)
+    });
   }
 
   // After that → silent
@@ -650,28 +569,17 @@ export default async function handler(
 
   if (!hasMeaningfulIntent) {
     const tempLang = detectLanguage(description_raw);
-    const reply = buildReplyText(tempLang, "greeting");
-
-   return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    reply_text: reply
-  });
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(tempLang, "greeting")
+    });
   }
 
     /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
-    lang = session?.language ?? await aiDetectLanguage(description_raw);
+    lang = await aiDetectLanguage(description_raw);
 
-    if (!session?.language) {
-      await supabase.from("conversation_sessions").upsert({
-      condo_id,
-      phone_number,
-      language: lang,
-      updated_at: new Date()
-    });
-    }
-
-    const description_clean = await aiCleanDescription(description_raw);
+        const description_clean = await aiCleanDescription(description_raw);
     
     /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -688,6 +596,88 @@ export default async function handler(
     }
 
     const unit_id = resident.unit_id;
+
+    /* ===== HANDLE EXISTING DRAFT ===== */
+const { data: draft } = await supabase
+  .from("tickets")
+  .select("*")
+  .eq("condo_id", condo_id)
+  .eq("unit_id", unit_id)
+  .eq("status", "draft")
+  .order("created_at", { ascending: false })
+  .limit(1)
+  .maybeSingle();
+
+if (draft) {
+  const activeLang = lang ?? detectLanguage(description_raw);
+
+  // OPTION 1 — EDIT
+  if (isOption(description_raw, "1")) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        activeLang === "ms"
+          ? "Sila hantar penerangan baharu."
+          : activeLang === "zh"
+          ? "请发送新的问题描述。"
+          : activeLang === "ta"
+          ? "புதிய விளக்கத்தை அனுப்பவும்."
+          : "Please send the updated description."
+    });
+  }
+
+  // OPTION 2 — PHOTO / VIDEO
+  if (isOption(description_raw, "2")) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        activeLang === "ms"
+          ? "Sila hantar gambar atau video sekarang."
+          : activeLang === "zh"
+          ? "请现在发送照片或视频。"
+          : activeLang === "ta"
+          ? "இப்போது புகைப்படம் அல்லது வீடியோ அனுப்பவும்."
+          : "Please send the photo or video now."
+    });
+  }
+
+  // OPTION 3 — CONFIRM
+  if (isOption(description_raw, "3")) {
+    await supabase
+      .from("tickets")
+      .update({
+        status: "draft",
+        confirmed_at: new Date()
+      })
+      .eq("id", draft.id);
+
+    return res.status(200).json({
+      success: true,
+      ticket_id: draft.id,
+      reply_text: buildDraftMenu(lang)
+    });
+  }
+
+  // UPDATE DRAFT (text or media)
+  await supabase
+    .from("tickets")
+    .update({
+      description_raw:
+        description_raw.length > 3 ? description_raw : draft.description_raw,
+      media: body.image_url
+        ? [...(draft.media || []), body.image_url]
+        : draft.media
+    })
+    .eq("id", draft.id);
+
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildDraftMenu(activeLang)
+  });
+}
 
     /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
@@ -717,136 +707,30 @@ export default async function handler(
       }
     }
 
-      /* ===== HANDLE EXISTING DRAFT ===== */
-  const { data: draft } = await supabase
-    .from("tickets")
-    .select("*")
-    .eq("condo_id", condo_id)
-    .eq("unit_id", unit_id)
-    .eq("status", "draft")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (draft) {
-    
-    // CONFIRM
-  if (isConfirmMessage(description_raw)) {
-  await supabase
-    .from("tickets")
-    .update({
-      status: "new",
-      confirmed_at: new Date()
-    })
-    .eq("id", draft.id);
-
-  const reply = buildReplyText(getSafeLang(), "confirmed", draft.id);
-
-  return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    ticket_id: draft.id,
-    reply_text: reply
-    });
-  }
-
-
-    // EDIT
-if (isEditMessage(description_raw)) {
-  // mark session as editing
-  await supabase
-    .from("conversation_sessions")
-    .upsert({
-      condo_id,
-      phone_number,
-      editing_draft: true,
-      updated_at: new Date()
-    });
-
-  const reply =
-    lang === "ms"
-      ? "✏️ Sila hantar penerangan baharu untuk aduan ini."
-      : lang === "zh"
-      ? "✏️ 请发送新的问题描述。"
-      : lang === "ta"
-      ? "✏️ புதிய விளக்கத்தை அனுப்பவும்."
-      : "✏️ Please send the updated description.";
-
-  return replyAndExit(res, {
-    condo_id,
-    phone_number,
-    reply_text: reply
-  });
-}
-
-    // Update draft text or media
-const isEditing = session?.editing_draft === true;
-
-await supabase
-  .from("tickets")
-  .update({
-    description_raw: isEditing ? description_raw : draft.description_raw,
-    media: body.media_url
-      ? [...(draft.media || []), body.media_url]
-      : draft.media,
-  })
-  .eq("id", draft.id);
-
-// clear editing flag
-if (isEditing) {
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      editing_draft: false
-    })
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number);
-}
-
-const tempLang = lang ?? detectLanguage(description_raw);
-
-return replyAndExit(res, {
-  condo_id,
-  phone_number,
-  reply_text: buildDraftPrompt(tempLang)
-});
-    }
-
-      /* ===== CREATE TICKET ===== */
+    /* ===== CREATE TICKET ===== */
     const { data: ticket, error } = await supabase
-    .from("tickets")
-    .insert({
-      condo_id,
-      unit_id: intent_category === "unit" ? unit_id : null,
-      description_raw,
-      description_clean,
-      source: "whatsapp",
-      status: "draft", // 🔑 DRAFT
-      is_common_area: intent_category === "common_area",
-      intent_category,
-      intent_source,
-      intent_confidence,
-      diagnosis_fee: intent_category === "unit" ? 30 : 0,
-      media: body.media_url ? [body.media_url] : [],
-    })
-    .select()
-    .single();
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "draft",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
+      })
+      .select()
+      .single();
 
-  if (error || !ticket) throw error;
-
-  const tempLang = lang !== null ? lang : detectLanguage(description_raw);
-
-return replyAndExit(res, {
-  condo_id,
-  phone_number,
-  ticket_id: ticket.id,
-  reply_text: buildDraftPrompt(getSafeLang())
-});
+    if (error || !ticket) throw error;
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
-     const ai = openai; // 🔑 tell TypeScript this is non-null
-      const emb = await ai!.embeddings.create({
+      const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_clean
       });
@@ -894,7 +778,7 @@ return replyAndExit(res, {
       success: true,
       ticket_id: ticket.id,
       intent_category,
-      reply_text: buildReplyText(getSafeLang(), "confirmed", ticket.id)
+      reply_text: buildReplyText(lang, "confirmed", ticket.id)
     });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
