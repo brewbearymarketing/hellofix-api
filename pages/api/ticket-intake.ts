@@ -312,11 +312,6 @@ function buildReplyText(
   }
 }
 
-/* ================= DETECT NUMERIC REPLIES ================= */
-function isNumericOption(text: string): boolean {
-  return ["1", "2", "3", "4"].includes(text.trim());
-}
-
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -462,7 +457,7 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  try {
+/* ================= NORMALIZE INPUT ================= */
     const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
@@ -473,24 +468,42 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-    
+
+  /* ===== DETECT NUMERIC REPLY ===== */
+    const numericReply = description_raw.trim();
+
+    const isConfirm = numericReply === "1";
+    const isEdit = numericReply === "2";
+    const isCancel = numericReply === "3";
+
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
-  /* =====================================================
-       🔒 CHECK EXISTING CONVERSATION LANGUAGE
-    ===================================================== */
-    const { data: draft } = await supabase
-      .from("ticket_drafts")
+  /* ==============🔒 CHECK EXISTING CONVERSATION LANGUAGE===== */
+    const { data: existingTicket } = await supabase
+      .from("tickets")
       .select("id, language")
       .eq("condo_id", condo_id)
-      .eq("status", "draft")
+      .eq("status", "new")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (existingTicket?.language) {
       lang = existingTicket.language;
+    }
+
+
+  /* ============ 🔒 CHECK EXISTING DRAFT LANGUAGE ============ */
+    const { data: existingDraft } = await supabase
+      .from("ticket_drafts")
+      .select("*")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (existingDraft?.language) {
+    lang = existingDraft.language;
     }
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
@@ -546,16 +559,6 @@ export default async function handler(
     ignored: true
   });
 }
-
-     /* ===== FETCH EXISTING DRAFT ===== */
-    const { data: draft } = await supabase
-  .from("ticket_drafts")
-  .select("*")
-  .eq("condo_id", condo_id)
-  .eq("phone_number", phone_number)
-  .maybeSingle();
-
-
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
@@ -568,85 +571,133 @@ export default async function handler(
     });
   }
 
-    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
-    let lang = draft?.language;
+    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) & CLEAN ISSUE ===== */
     if (!lang) {
-    lang = await aiDetectLanguage(description_raw);
+        lang = await aiDetectLanguage(description_raw);
     }
-    const description_clean = await aiCleanDescription(description_raw);
+        const description_clean = await aiCleanDescription(description_raw);
 
-    /* =====  HANDLE NUMERIC COMMANDS ===== */
-    if (draft && isNumericOption(description_raw)) {
-  switch (description_raw.trim()) {
-    case "1":
-      // CONFIRM → create real ticket
-      break;
+   /* ===== NUMERIC DRAFT ACTION ===== */
 
-    case "2":
-      // EDIT
-      return res.status(200).json({
-        success: true,
-        reply_text:
-          "Please send the corrected description of the issue."
-      });
+  if (existingDraft && isConfirm) {
+  // resident verification (UNCHANGED)
+  const { data: resident } = await supabase
+    .from("residents")
+    .select("unit_id, approved")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
 
-    case "3":
-      // ADD MEDIA
-      return res.status(200).json({
-        success: true,
-        reply_text:
-          "Please send a photo or video of the issue."
-      });
-
-    case "4":
-      // CANCEL
-      await supabase
-        .from("ticket_drafts")
-        .delete()
-        .eq("id", draft.id);
-
-      return res.status(200).json({
-        success: true,
-        reply_text: "Request cancelled."
-      });
+  if (!resident || !resident.approved) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️ Your phone number is not registered. Please contact management."
+    });
   }
+
+  const unit_id = resident.unit_id;
+
+  const { data: ticket } = await supabase
+    .from("tickets")
+    .insert({
+      condo_id,
+      unit_id: existingDraft.intent_category === "unit" ? unit_id : null,
+      description_raw: existingDraft.description_raw,
+      description_clean: existingDraft.description_clean,
+      source: "whatsapp",
+      status: "new",
+      is_common_area: existingDraft.intent_category === "common_area",
+      intent_category: existingDraft.intent_category,
+      intent_source: existingDraft.intent_source,
+      intent_confidence: existingDraft.intent_confidence,
+      diagnosis_fee:
+        existingDraft.intent_category === "unit" ? 30 : 0,
+      language: existingDraft.language
+    })
+    .select()
+    .single();
+
+  await supabase
+    .from("ticket_drafts")
+    .delete()
+    .eq("id", existingDraft.id);
+
+  return res.status(200).json({
+    success: true,
+    ticket_id: ticket.id,
+    reply_text: buildReplyText(existingDraft.language, "confirmed", ticket.id)
+  });
+
+    /* ===== EMBEDDING + DUPLICATE ===== */
+    if (openai && description_clean) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description_clean
+      });
+
+      const embedding = emb.data[0].embedding;
+
+      await supabase
+        .from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
+
+      const { data: relation } = await supabase.rpc(
+        "detect_ticket_relation",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          ticket_unit_id: ticket.unit_id,
+          ticket_is_common_area: ticket.is_common_area,
+          exclude_id: ticket.id,
+          similarity_threshold: 0.85
+        }
+      );
+
+      if (relation?.length) {
+        const r = relation[0];
+
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: r.relation_type === "hard_duplicate",
+            duplicate_of:
+              r.relation_type === "hard_duplicate"
+                ? r.related_ticket_id
+                : null,
+            related_to:
+              r.relation_type === "related"
+                ? r.related_ticket_id
+                : null
+          })
+          .eq("id", ticket.id);
+      }
+    }    
 }
 
-        /* ===== MEDIA ATTACHMENT ===== */
-    if (draft && (image_url || video_url)) {
-      await supabase
-        .from("ticket_drafts")
-        .update({
-          media_urls: [...(draft.media_urls || []), image_url || video_url],
-          updated_at: new Date()
-        })
-        .eq("id", draft.id);
+  if (existingDraft && isEdit) {
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: "Please re-enter the maintenance issue description."
+  });
+}
 
-      return res.status(200).json({
-        reply_text:
-          "Media received.\n1 Confirm\n2 Edit\n3 Add more media\n4 Cancel"
-      });
-    }
+  if (existingDraft && isCancel) {
+  await supabase
+    .from("ticket_drafts")
+    .delete()
+    .eq("id", existingDraft.id);
 
-      /* ===== UPSERT DRAFT ===== */
-    await supabase.from("ticket_drafts").upsert({
-      condo_id,
-      description_raw,
-      description_clean,
-      language: lang,
-      updated_at: new Date()
-    });
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: "Request cancelled."
+  });
+}
 
-    return res.status(200).json({
-      reply_text:
-        `I understood your issue as:\n\n"${description_clean}"\n\n` +
-        `Reply:\n1 Confirm\n2 Edit\n3 Add photo/video\n4 Cancel`
-    });
-  } catch (err: any) {
-    console.error(err);
-    return res.status(500).json({ error: "Internal Server Error" });
-  }
-    
        /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
@@ -695,80 +746,39 @@ export default async function handler(
       }
     }
 
-    /* ===== CREATE TICKET ===== */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0,
-        language: lang
-      })
-      .select()
-      .single();
-
-    if (error || !ticket) throw error;
-
-    /* ===== EMBEDDING + DUPLICATE ===== */
-    if (openai && description_clean) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_clean
-      });
-
-      const embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: ticket.unit_id,
-          ticket_is_common_area: ticket.is_common_area,
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
-
-      if (relation?.length) {
-        const r = relation[0];
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: r.relation_type === "hard_duplicate",
-            duplicate_of:
-              r.relation_type === "hard_duplicate"
-                ? r.related_ticket_id
-                : null,
-            related_to:
-              r.relation_type === "related"
-                ? r.related_ticket_id
-                : null
-          })
-          .eq("id", ticket.id);
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
+  /* ===== CREATE OR UPDATE DRAFT ===== */
+if (!existingDraft) {
+  await supabase.from("ticket_drafts").insert({
+    condo_id,
+    phone_number,
+    description_raw,
+    description_clean,
+    intent_category,
+    intent_source,
+    intent_confidence,
+    language: lang
+  });
+} else {
+  await supabase
+    .from("ticket_drafts")
+    .update({
+      description_raw,
+      description_clean,
       intent_category,
-      reply_text: buildReplyText(lang, "confirmed", ticket.id)
-    });
+      intent_source,
+      intent_confidence,
+      updated_at: new Date()
+    })
+    .eq("id", existingDraft.id);
+}
+
+   /* ===== ASK FOR NUMERIC CONFIRMATION ===== */
+  return res.status(200).json({
+  success: true,
+  draft: true,
+  reply_text: buildDraftMenu(lang, description_clean)
+});
+
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
