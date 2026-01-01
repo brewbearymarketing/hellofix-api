@@ -488,11 +488,28 @@ export default async function handler(
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
+  /* =====================================================
+       🔒 CHECK EXISTING CONVERSATION LANGUAGE
+    ===================================================== */
+    const { data: existingTicket } = await supabase
+      .from("tickets")
+      .select("id, language")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .eq("status", "new")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingTicket?.language) {
+      lang = existingTicket.language;
+    }
+
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
-    const tempLang = detectLanguage(description_raw);
+    const tempLang = lang ?? detectLanguage(description_raw);
     return res.status(200).json({
       success: true,
       ignored: true,
@@ -504,7 +521,7 @@ export default async function handler(
     if (throttle.level === "soft") {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
-        const tempLang = detectLanguage(description_raw);
+        cconst tempLang = lang ?? detectLanguage(description_raw);
         return res.status(200).json({
           success: true,
           ignored: true,
@@ -515,7 +532,7 @@ export default async function handler(
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
     if (isGreetingOnly(description_raw)) {
-  const tempLang = detectLanguage(description_raw);
+  const tempLang = lang ?? detectLanguage(description_raw);
 
   // First message only → greeting
   if (throttle.count === 1) {
@@ -545,7 +562,7 @@ export default async function handler(
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
-    const tempLang = detectLanguage(description_raw);
+    const tempLang = lang ?? detectLanguage(description_raw);
     return res.status(200).json({
       success: true,
       ignored: true,
@@ -553,7 +570,7 @@ export default async function handler(
     });
   }
 
-    /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
+    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
     lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
@@ -591,6 +608,7 @@ export default async function handler(
       .from("tickets")
       .insert({
         condo_id,
+        phone_number,
         unit_id: intent_category === "unit" ? unit_id : null,
         description_raw,
         description_clean,
@@ -600,7 +618,8 @@ export default async function handler(
         intent_category,
         intent_source,
         intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0
+        diagnosis_fee: intent_category === "unit" ? 30 : 0,
+        language: lang
       })
       .select()
       .single();
