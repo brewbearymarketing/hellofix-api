@@ -312,6 +312,11 @@ function buildReplyText(
   }
 }
 
+/* ================= DETECT NUMERIC REPLIES ================= */
+function isNumericOption(text: string): boolean {
+  return ["1", "2", "3", "4"].includes(text.trim());
+}
+
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -475,11 +480,11 @@ export default async function handler(
   /* =====================================================
        🔒 CHECK EXISTING CONVERSATION LANGUAGE
     ===================================================== */
-    const { data: existingTicket } = await supabase
-      .from("tickets")
+    const { data: draft } = await supabase
+      .from("ticket_drafts")
       .select("id, language")
       .eq("condo_id", condo_id)
-      .eq("status", "new")
+      .eq("status", "draft")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -541,6 +546,16 @@ export default async function handler(
     ignored: true
   });
 }
+
+     /* ===== FETCH EXISTING DRAFT ===== */
+    const { data: draft } = await supabase
+  .from("ticket_drafts")
+  .select("*")
+  .eq("condo_id", condo_id)
+  .eq("phone_number", phone_number)
+  .maybeSingle();
+
+
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
@@ -554,10 +569,84 @@ export default async function handler(
   }
 
     /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
+    let lang = draft?.language;
+    if (!lang) {
     lang = await aiDetectLanguage(description_raw);
 
-        const description_clean = await aiCleanDescription(description_raw);
+    const description_clean = await aiCleanDescription(description_raw);
 
+    /* =====  HANDLE NUMERIC COMMANDS ===== */
+    if (draft && isNumericOption(description_raw)) {
+  switch (description_raw.trim()) {
+    case "1":
+      // CONFIRM → create real ticket
+      break;
+
+    case "2":
+      // EDIT
+      return res.status(200).json({
+        success: true,
+        reply_text:
+          "Please send the corrected description of the issue."
+      });
+
+    case "3":
+      // ADD MEDIA
+      return res.status(200).json({
+        success: true,
+        reply_text:
+          "Please send a photo or video of the issue."
+      });
+
+    case "4":
+      // CANCEL
+      await supabase
+        .from("ticket_drafts")
+        .delete()
+        .eq("id", draft.id);
+
+      return res.status(200).json({
+        success: true,
+        reply_text: "Request cancelled."
+      });
+  }
+}
+
+        /* ===== MEDIA ATTACHMENT ===== */
+    if (draft && (image_url || video_url)) {
+      await supabase
+        .from("ticket_drafts")
+        .update({
+          media_urls: [...(draft.media_urls || []), image_url || video_url],
+          updated_at: new Date()
+        })
+        .eq("id", draft.id);
+
+      return res.status(200).json({
+        reply_text:
+          "Media received.\n1 Confirm\n2 Edit\n3 Add more media\n4 Cancel"
+      });
+    }
+
+      /* ===== UPSERT DRAFT ===== */
+    await supabase.from("ticket_drafts").upsert({
+      condo_id,
+      description_raw,
+      description_clean,
+      language: lang,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      reply_text:
+        `I understood your issue as:\n\n"${description_clean}"\n\n` +
+        `Reply:\n1 Confirm\n2 Edit\n3 Add photo/video\n4 Cancel`
+    });
+  } catch (err: any) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+    
        /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
