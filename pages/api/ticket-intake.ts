@@ -1,9 +1,10 @@
+/* ================= IMPORT ================= */
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { toFile } from "openai/uploads";
 
-/* ================= CLIENTS ================= */
+/* ================= GLOBAL CLIENTS ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -15,7 +16,6 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
-/* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
 const THROTTLE_SOFT_LIMIT = 5;
@@ -459,7 +459,7 @@ export default async function handler(
 
   try {
     const body =
-    typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
 
@@ -472,27 +472,11 @@ export default async function handler(
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
-  /* =====================================================
-       🔒 CHECK EXISTING CONVERSATION LANGUAGE
-    ===================================================== */
-    const { data: existingTicket } = await supabase
-      .from("tickets")
-      .select("id, language")
-      .eq("condo_id", condo_id)
-      .eq("status", "new")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existingTicket?.language) {
-      lang = existingTicket.language;
-    }
-
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
-    const tempLang = lang ?? detectLanguage(description_raw);
+    const tempLang = detectLanguage(description_raw);
     return res.status(200).json({
       success: true,
       ignored: true,
@@ -504,7 +488,7 @@ export default async function handler(
     if (throttle.level === "soft") {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
-        const tempLang = lang ?? detectLanguage(description_raw);
+        const tempLang = detectLanguage(description_raw);
         return res.status(200).json({
           success: true,
           ignored: true,
@@ -515,7 +499,7 @@ export default async function handler(
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
     if (isGreetingOnly(description_raw)) {
-  const tempLang = lang ?? detectLanguage(description_raw);
+  const tempLang = detectLanguage(description_raw);
 
   // First message only → greeting
   if (throttle.count === 1) {
@@ -545,7 +529,7 @@ export default async function handler(
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
-    const tempLang = lang ?? detectLanguage(description_raw);
+    const tempLang = detectLanguage(description_raw);
     return res.status(200).json({
       success: true,
       ignored: true,
@@ -553,12 +537,12 @@ export default async function handler(
     });
   }
 
-    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
+    /* ===== COMPLAINT CONFIRMED → AI LANGUAGE DETECTION ===== */
     lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
-
-       /* ===== VERIFY RESIDENT ===== */
+    
+    /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -616,8 +600,7 @@ export default async function handler(
         intent_category,
         intent_source,
         intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0,
-        language: lang
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
       .select()
       .single();
@@ -683,4 +666,3 @@ export default async function handler(
       detail: err.message
     });
   }
-}
