@@ -468,22 +468,6 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-
-        /* ===== VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
-    }
-
-    const unit_id = resident.unit_id;
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
@@ -574,6 +558,22 @@ export default async function handler(
     lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
+
+       /* ===== VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(403).json({
+        error: "Phone number not approved by management"
+      });
+    }
+
+    const unit_id = resident.unit_id;
 
     /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
