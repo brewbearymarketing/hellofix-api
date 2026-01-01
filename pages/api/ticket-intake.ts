@@ -458,17 +458,8 @@ export default async function handler(
   }
 
   try {
- let body: any;
-
-  try {
-    body =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body;
-  } catch {
-  return res.status(200).json({ ok: true });
-  }
-
+    const body =
+    typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const { condo_id, phone_number } = body;
 
