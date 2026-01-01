@@ -572,7 +572,7 @@ export default async function handler(
     let lang = draft?.language;
     if (!lang) {
     lang = await aiDetectLanguage(description_raw);
-
+    }
     const description_clean = await aiCleanDescription(description_raw);
 
     /* =====  HANDLE NUMERIC COMMANDS ===== */
