@@ -15,6 +15,7 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
+/* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
 const THROTTLE_SOFT_LIMIT = 5;
@@ -311,32 +312,6 @@ function buildReplyText(
   }
 }
 
-/* ================= RESIDENT FLOW REPLY ================= */
-function buildPreviewText(
-  lang: "en" | "ms" | "zh" | "ta",
-  ticket: any
-): string {
-  const fee = ticket.is_common_area ? "RM0" : "RM30";
-
-  const body = `
-I understood the issue as:
-
-1️⃣ Issue: ${ticket.description_clean}
-2️⃣ Category: ${ticket.is_common_area ? "Common Area" : "Your Unit"}
-3️⃣ Estimated fee: ${fee}
-
-Reply with:
-1️⃣ Confirm & submit
-2️⃣ Edit issue text
-3️⃣ Change category
-4️⃣ Add photo
-5️⃣ Cancel
-`.trim();
-
-  return body;
-}
-
-
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -493,17 +468,6 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-    
- /* ===== SESSION LOOKUP ===== */
-        const { data: session } = await supabase
-  .from("conversation_sessions")
-  .select("*")
-  .eq("condo_id", condo_id)
-  .eq("phone_number", phone_number)
-  .maybeSingle();
-    
-    /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-    let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
         /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -520,44 +484,9 @@ export default async function handler(
     }
 
     const unit_id = resident.unit_id;
-
-        /* ===== HARD-INTERCEPT session BEFORE ANY GREETING CHECK ===== */
-    if (session) {
-  const msg = description_raw.trim();
-
-  // PREVIEW STATE → NUMBER MENU
-  if (session.state === "preview") {
-    if (["1","2","3","4","5"].includes(msg)) {
-      // handle confirm / edit / change / photo / cancel
-      // MUST return response
-    }
-
-    // ❗ Any other input is invalid during preview
-    return res.status(200).json({
-      success: true,
-      reply_text: "Please reply with 1, 2, 3, 4, or 5."
-    });
-  }
-
-  // EDITING STATE → ACCEPT FREE TEXT
-  if (session.state === "editing") {
-    // accept new description
-    // update ticket
-    // move back to preview
-    // return preview
-  }
-
-  // AWAITING PHOTO → ONLY ACCEPT IMAGE
-  if (session.state === "awaiting_photo") {
-    if (!body.image_url) {
-      return res.status(200).json({
-        success: true,
-        reply_text: "Please send a photo of the issue."
-      });
-    }
-    // attach photo, return preview
-  }
-}
+    
+    /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
+    let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
@@ -671,149 +600,12 @@ export default async function handler(
         intent_category,
         intent_source,
         intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0,
-        awaiting_user_reply: true,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0
       })
       .select()
       .single();
 
     if (error || !ticket) throw error;
-
-       /* ===== CREATE/UPDATE CONVERSATION SESSION ===== */
-  await supabase
-  .from("conversation_sessions")
-  .upsert({
-    condo_id,
-    phone_number,
-    current_ticket_id: ticket.id,
-    state: "preview",
-    language: lang,
-    last_message: description_raw,
-    last_reply: "preview"
-  }, {
-    onConflict: "condo_id,phone_number"
-  });
-    
-  /* ===== NUMBER SELECTION HANDLER ===== */
-if (session && session.state === "preview") {
-  const choice = description_raw.trim();
-
-  // 1️⃣ CONFIRM
-  if (choice === "1") {
-    await supabase
-      .from("tickets")
-      .update({
-        awaiting_user_reply: false,
-        status: "open"
-      })
-      .eq("id", session.current_ticket_id);
-
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "confirmed" })
-      .eq("id", session.id);
-
-    return res.status(200).json({
-      success: true,
-      reply_text: buildReplyText(session.language, "confirmed", session.current_ticket_id)
-    });
-  }
-
-  // 2️⃣ EDIT
-  if (choice === "2") {
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "editing" })
-      .eq("id", session.id);
-
-    return res.status(200).json({
-      success: true,
-      reply_text: "Please retype the issue description."
-    });
-  }
-
-  // 3️⃣ CHANGE CATEGORY
-  if (choice === "3") {
-    const { data: t } = await supabase
-      .from("tickets")
-      .select("*")
-      .eq("id", session.current_ticket_id)
-      .single();
-
-    const isCommon = !t.is_common_area;
-
-    await supabase
-      .from("tickets")
-      .update({
-        is_common_area: isCommon,
-        unit_id: isCommon ? null : t.unit_id,
-        diagnosis_fee: isCommon ? 0 : 30
-      })
-      .eq("id", t.id);
-
-    return res.status(200).json({
-      success: true,
-      reply_text: buildPreviewText(session.language, {
-        ...t,
-        is_common_area: isCommon
-      })
-    });
-  }
-
-  // 4️⃣ ADD PHOTO
-  if (choice === "4") {
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "awaiting_photo" })
-      .eq("id", session.id);
-
-    return res.status(200).json({
-      success: true,
-      reply_text: "Please send a photo of the issue."
-    });
-  }
-
-  // 5️⃣ CANCEL
-  if (choice === "5") {
-    await supabase
-      .from("tickets")
-      .update({ status: "cancelled" })
-      .eq("id", session.current_ticket_id);
-
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "cancelled" })
-      .eq("id", session.id);
-
-    return res.status(200).json({
-      success: true,
-      reply_text: "Report cancelled. No ticket was submitted."
-    });
-  }
-}
-
-      /* ===== PHOTO RECEIVE LOGIC ===== */
-    if (session?.state === "awaiting_photo" && body.image_url) {
-  await supabase
-    .from("tickets")
-    .update({
-      images: supabase.rpc("jsonb_insert", {
-        target: "images",
-        value: body.image_url
-      })
-    })
-    .eq("id", session.current_ticket_id);
-
-  await supabase
-    .from("conversation_sessions")
-    .update({ state: "preview" })
-    .eq("id", session.id);
-
-  return res.status(200).json({
-    success: true,
-    reply_text: "Photo received.\nReply 1️⃣ to confirm or 2️⃣ to edit."
-  });
-}
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
@@ -862,13 +654,11 @@ if (session && session.state === "preview") {
     }
 
     return res.status(200).json({
-  success: true,
-  ticket_id: ticket.id,
-  intent_category,
-  awaiting_confirmation: true,
-  reply_text: buildPreviewText(lang, ticket)
-});
-
+      success: true,
+      ticket_id: ticket.id,
+      intent_category,
+      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+    });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
