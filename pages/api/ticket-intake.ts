@@ -567,9 +567,13 @@ export default async function handler(
       .maybeSingle();
 
     if (!resident || !resident.approved) {
-      return res.status(403).json({
-        error: "Phone number not approved by management"
-      });
+      return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
+});
+
     }
 
     const unit_id = resident.unit_id;
