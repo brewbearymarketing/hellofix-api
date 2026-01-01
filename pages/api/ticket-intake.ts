@@ -608,7 +608,6 @@ export default async function handler(
       .from("tickets")
       .insert({
         condo_id,
-        phone_number,
         unit_id: intent_category === "unit" ? unit_id : null,
         description_raw,
         description_clean,
