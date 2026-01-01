@@ -666,3 +666,4 @@ export default async function handler(
       detail: err.message
     });
   }
+}
