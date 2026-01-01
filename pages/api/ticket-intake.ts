@@ -479,7 +479,6 @@ export default async function handler(
       .from("tickets")
       .select("id, language")
       .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
       .eq("status", "new")
       .order("created_at", { ascending: false })
       .limit(1)
