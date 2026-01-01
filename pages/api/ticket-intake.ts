@@ -521,7 +521,7 @@ export default async function handler(
     if (throttle.level === "soft") {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
-        cconst tempLang = lang ?? detectLanguage(description_raw);
+        const tempLang = lang ?? detectLanguage(description_raw);
         return res.status(200).json({
           success: true,
           ignored: true,
