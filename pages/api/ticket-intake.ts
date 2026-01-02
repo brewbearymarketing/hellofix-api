@@ -312,15 +312,6 @@ function buildReplyText(
   }
 }
 
-/* ================= BUILD DRAFT MENU ================= */
-function buildDraftMenu(
-  lang: "en" | "ms" | "zh" | "ta",
-  summary: string
-) {
-  return `Please confirm your maintenance request:\n"${summary}"\n\n1️⃣ Submit\n2️⃣ Edit\n3️⃣ Cancel`;
-}
-
-
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -466,7 +457,7 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-/* ================= NORMALIZE INPUT ================= */
+  try {
     const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
@@ -477,18 +468,13 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-
-  /* ===== DETECT NUMERIC REPLY ===== */
-    const numericReply = description_raw.trim();
-
-    const isConfirm = numericReply === "1";
-    const isEdit = numericReply === "2";
-    const isCancel = numericReply === "3";
-
+    
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
-  /* ==============🔒 CHECK EXISTING CONVERSATION LANGUAGE===== */
+  /* =====================================================
+       🔒 CHECK EXISTING CONVERSATION LANGUAGE
+    ===================================================== */
     const { data: existingTicket } = await supabase
       .from("tickets")
       .select("id, language")
@@ -500,19 +486,6 @@ export default async function handler(
 
     if (existingTicket?.language) {
       lang = existingTicket.language;
-    }
-
-
-  /* ============ 🔒 CHECK EXISTING DRAFT LANGUAGE ============ */
-    const { data: existingDraft } = await supabase
-      .from("ticket_drafts")
-      .select("*")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (existingDraft?.language) {
-    lang = existingDraft.language;
     }
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
@@ -580,49 +553,81 @@ export default async function handler(
     });
   }
 
-    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) & CLEAN ISSUE ===== */
-let description_clean = existingDraft?.description_clean ?? null;
-
-if (!existingDraft) {
-  if (!lang) {
+    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
     lang = await aiDetectLanguage(description_raw);
-  }
-  description_clean = await aiCleanDescription(description_raw);
-}
 
-   /* ===== NUMERIC DRAFT ACTION ===== */
+        const description_clean = await aiCleanDescription(description_raw);
 
-  if (existingDraft && isConfirm) {
-  // resident verification (UNCHANGED)
+       /* ===== VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
 
-     /* ===== SKIP AI CLEANING FOR NUMERIC REPLIES ===== */
-if (!existingDraft) {
-  description_clean = await aiCleanDescription(description_raw);
-}
-    
-  const unit_id = resident.unit_id;
+    if (!resident || !resident.approved) {
+      return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
+});
 
-  const { data: ticket } = await supabase
-    .from("tickets")
-    .insert({
-      condo_id,
-      unit_id: existingDraft.intent_category === "unit" ? unit_id : null,
-      description_raw: existingDraft.description_raw,
-      description_clean: existingDraft.description_clean,
-      source: "whatsapp",
-      status: "new",
-      is_common_area: existingDraft.intent_category === "common_area",
-      intent_category: existingDraft.intent_category,
-      intent_source: existingDraft.intent_source,
-      intent_confidence: existingDraft.intent_confidence,
-      diagnosis_fee:
-        existingDraft.intent_category === "unit" ? 30 : 0,
-      language: existingDraft.language
-    })
-    .select()
-    .single();
+    }
 
-    
+    const unit_id = resident.unit_id;
+
+    /* ===== INTENT DETECTION ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
+
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
+
+    /* ===== CREATE TICKET ===== */
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0,
+        language: lang
+      })
+      .select()
+      .single();
+
+    if (error || !ticket) throw error;
+
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
       const emb = await openai.embeddings.create({
@@ -667,118 +672,14 @@ if (!existingDraft) {
           })
           .eq("id", ticket.id);
       }
-    }    
-    
-  const { data: resident } = await supabase
-    .from("residents")
-    .select("unit_id, approved")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
-
-  if (!resident || !resident.approved) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        "⚠️ Your phone number is not registered. Please contact management."
-    });
-  }
-
-  await supabase
-    .from("ticket_drafts")
-    .delete()
-    .eq("id", existingDraft.id);
-
-  return res.status(200).json({
-    success: true,
-    ticket_id: ticket.id,
-    reply_text: buildReplyText(existingDraft.language, "confirmed", ticket.id)
-  });
-}
-
-  if (existingDraft && isEdit) {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: "Please re-enter the maintenance issue description."
-  });
-}
-
-  if (existingDraft && isCancel) {
-  await supabase
-    .from("ticket_drafts")
-    .delete()
-    .eq("id", existingDraft.id);
-
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: "Request cancelled."
-  });
-}
-
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
-      "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
-
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
     }
 
-  /* ===== CREATE OR UPDATE DRAFT ===== */
-if (!existingDraft) {
-  await supabase.from("ticket_drafts").insert({
-    condo_id,
-    phone_number,
-    description_raw,
-    description_clean,
-    intent_category,
-    intent_source,
-    intent_confidence,
-    language: lang
-  });
-} else {
-  await supabase
-    .from("ticket_drafts")
-    .update({
-      description_raw,
-      description_clean,
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
       intent_category,
-      intent_source,
-      intent_confidence,
-      updated_at: new Date()
-    })
-    .eq("id", existingDraft.id);
-}
-
-   /* ===== ASK FOR NUMERIC CONFIRMATION ===== */
-  return res.status(200).json({
-  success: true,
-  draft: true,
-  reply_text: buildDraftMenu(lang, description_clean)
-});
-
+      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+    });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
@@ -786,4 +687,173 @@ if (!existingDraft) {
       detail: err.message
     });
   }
+}
+
+/* ================= 🔴 OWNERSHIP / STATUS GUARDS ================= */
+
+async function canResidentEditTicket(
+  ticket_id: string,
+  condo_id: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("tickets")
+    .select("status")
+    .eq("id", ticket_id)
+    .eq("condo_id", condo_id)
+    .maybeSingle();
+
+  if (!data) return false;
+  return ["new", "awaiting_user_reply"].includes(data.status);
+}
+
+async function canResidentCancelTicket(
+  ticket_id: string,
+  condo_id: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("tickets")
+    .select("status, diagnosis_paid")
+    .eq("id", ticket_id)
+    .eq("condo_id", condo_id)
+    .maybeSingle();
+
+  if (!data) return false;
+  if (data.diagnosis_paid) return false;
+  if (data.status === "completed") return false;
+
+  return true;
+}
+
+/* ================= 🔴 EDIT TICKET ================= */
+
+export async function residentEditTicket(params: {
+  ticket_id: string;
+  condo_id: string;
+  new_description: string;
+}) {
+  const { ticket_id, condo_id, new_description } = params;
+
+  if (!(await canResidentEditTicket(ticket_id, condo_id))) {
+    throw new Error("Edit not allowed");
+  }
+
+  const description_clean = await aiCleanDescription(new_description);
+  const intent = await aiClassify(new_description);
+
+  await supabase.from("tickets").update({
+    description_raw: new_description,
+    description_clean,
+    intent_category: intent.category,
+    intent_confidence: intent.confidence,
+    updated_at: new Date()
+  }).eq("id", ticket_id);
+
+  await supabase.from("ticket_events").insert({
+    ticket_id,
+    event_type: "resident_edit",
+    actor_role: "resident"
+  });
+}
+
+/* ================= 🔴 CANCEL TICKET ================= */
+
+export async function residentCancelTicket(params: {
+  ticket_id: string;
+  condo_id: string;
+}) {
+  const { ticket_id, condo_id } = params;
+
+  if (!(await canResidentCancelTicket(ticket_id, condo_id))) {
+    throw new Error("Cancel not allowed");
+  }
+
+  await supabase.from("tickets").update({
+    status: "cancelled",
+    updated_at: new Date()
+  }).eq("id", ticket_id);
+
+  await supabase.from("ticket_events").insert({
+    ticket_id,
+    event_type: "resident_cancel",
+    actor_role: "resident"
+  });
+}
+
+/* ================= 🔴 ADD MEDIA ================= */
+
+export async function residentAddMedia(params: {
+  ticket_id: string;
+  file_url: string;
+}) {
+  const { ticket_id, file_url } = params;
+
+  await supabase.from("ticket_evidence").insert({
+    ticket_id,
+    file_url,
+    created_at: new Date()
+  });
+
+  await supabase.from("ticket_events").insert({
+    ticket_id,
+    event_type: "resident_add_media",
+    actor_role: "resident"
+  });
+}
+
+/* ================= 🔴 PAYMENT ================= */
+
+export async function createDiagnosisPayment(params: {
+  ticket_id: string;
+  provider: string;
+}) {
+  const { ticket_id, provider } = params;
+
+  const { data: ticket } = await supabase
+    .from("tickets")
+    .select("diagnosis_fee, diagnosis_paid")
+    .eq("id", ticket_id)
+    .maybeSingle();
+
+  if (!ticket || ticket.diagnosis_paid || ticket.diagnosis_fee <= 0) {
+    throw new Error("Payment not required");
+  }
+
+  return await supabase.from("payments").insert({
+    ticket_id,
+    amount: ticket.diagnosis_fee,
+    status: "pending",
+    provider,
+    payment_type: "diagnosis"
+  });
+}
+
+export async function confirmDiagnosisPayment(payment_id: string) {
+  const { data } = await supabase
+    .from("payments")
+    .select("ticket_id")
+    .eq("id", payment_id)
+    .single();
+
+  await supabase.from("payments")
+    .update({ status: "paid" })
+    .eq("id", payment_id);
+
+  await supabase.from("tickets")
+    .update({ diagnosis_paid: true, status: "paid" })
+    .eq("id", data.ticket_id);
+
+  await supabase.from("ticket_events").insert({
+    ticket_id: data.ticket_id,
+    event_type: "resident_payment_confirmed",
+    actor_role: "system"
+  });
+}
+
+/* ================= 🔴 CONTRACTOR NOTIFICATION GUARD ================= */
+
+/*
+🔴 ADD THIS CHECK wherever contractor is notified:
+
+if (ticket.diagnosis_fee > 0 && !ticket.diagnosis_paid) {
+  return; // block contractor notification
 }
