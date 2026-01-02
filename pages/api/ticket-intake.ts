@@ -312,6 +312,15 @@ function buildReplyText(
   }
 }
 
+/* ================= BUILD DRAFT MENU ================= */
+function buildDraftMenu(
+  lang: "en" | "ms" | "zh" | "ta",
+  summary: string
+) {
+  return `Please confirm your maintenance request:\n"${summary}"\n\n1️⃣ Submit\n2️⃣ Edit\n3️⃣ Cancel`;
+}
+
+
 /* ================= AI CLASSIFIER ================= */
 async function aiClassify(text: string): Promise<{
   category: "unit" | "common_area" | "mixed" | "uncertain";
@@ -572,31 +581,25 @@ export default async function handler(
   }
 
     /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) & CLEAN ISSUE ===== */
-    if (!lang) {
-        lang = await aiDetectLanguage(description_raw);
-    }
-        const description_clean = await aiCleanDescription(description_raw);
+let description_clean = existingDraft?.description_clean ?? null;
+
+if (!existingDraft) {
+  if (!lang) {
+    lang = await aiDetectLanguage(description_raw);
+  }
+  description_clean = await aiCleanDescription(description_raw);
+}
 
    /* ===== NUMERIC DRAFT ACTION ===== */
 
   if (existingDraft && isConfirm) {
   // resident verification (UNCHANGED)
-  const { data: resident } = await supabase
-    .from("residents")
-    .select("unit_id, approved")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
 
-  if (!resident || !resident.approved) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        "⚠️ Your phone number is not registered. Please contact management."
-    });
-  }
-
+     /* ===== SKIP AI CLEANING FOR NUMERIC REPLIES ===== */
+if (!existingDraft) {
+  description_clean = await aiCleanDescription(description_raw);
+}
+    
   const unit_id = resident.unit_id;
 
   const { data: ticket } = await supabase
@@ -619,17 +622,7 @@ export default async function handler(
     .select()
     .single();
 
-  await supabase
-    .from("ticket_drafts")
-    .delete()
-    .eq("id", existingDraft.id);
-
-  return res.status(200).json({
-    success: true,
-    ticket_id: ticket.id,
-    reply_text: buildReplyText(existingDraft.language, "confirmed", ticket.id)
-  });
-
+    
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
       const emb = await openai.embeddings.create({
@@ -675,6 +668,33 @@ export default async function handler(
           .eq("id", ticket.id);
       }
     }    
+    
+  const { data: resident } = await supabase
+    .from("residents")
+    .select("unit_id, approved")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  if (!resident || !resident.approved) {
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️ Your phone number is not registered. Please contact management."
+    });
+  }
+
+  await supabase
+    .from("ticket_drafts")
+    .delete()
+    .eq("id", existingDraft.id);
+
+  return res.status(200).json({
+    success: true,
+    ticket_id: ticket.id,
+    reply_text: buildReplyText(existingDraft.language, "confirmed", ticket.id)
+  });
 }
 
   if (existingDraft && isEdit) {
@@ -697,26 +717,6 @@ export default async function handler(
     reply_text: "Request cancelled."
   });
 }
-
-       /* ===== VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
-});
-
-    }
-
-    const unit_id = resident.unit_id;
 
     /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
