@@ -468,6 +468,16 @@ export default async function handler(
     if (!condo_id || !phone_number || !description_raw) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+     /* ===== IF NUMERIC FLOW EXIST, HANDLE IT ===== */
+const routed = await routeNumericResidentAction(body);
+
+if (routed?.handled) {
+  return res.status(200).json({
+    success: true,
+    reply_text: routed.reply_text
+  });
+}
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
@@ -674,12 +684,23 @@ export default async function handler(
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      intent_category,
-      reply_text: buildReplyText(lang, "confirmed", ticket.id)
-    });
+// 🔴 ADD THIS BEFORE RETURN
+await createPostTicketSession({
+  condo_id,
+  phone_number,
+  ticket_id: ticket.id
+});
+
+return res.status(200).json({
+  success: true,
+  ticket_id: ticket.id,
+  intent_category,
+  reply_text:
+    buildReplyText(lang, "confirmed", ticket.id) +
+    "\n\n" +
+    buildResidentMenu(lang)
+});
+
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
