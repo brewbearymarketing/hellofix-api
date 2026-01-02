@@ -930,32 +930,37 @@ async function canResidentEditTicket(
   ticket_id: string,
   condo_id: string
 ): Promise<boolean> {
-  const { data } = await supabase
-    .from("tickets")
-    .select("status")
-    .eq("id", ticket_id)
-    .eq("condo_id", condo_id)
-    .maybeSingle();
+  const ticket = await safeMaybeSingle<{ status: string }>(
+    supabase
+      .from("tickets")
+      .select("status")
+      .eq("id", ticket_id)
+      .eq("condo_id", condo_id)
+      .maybeSingle()
+  );
 
-  if (!data) return false;
-  return ["new", "awaiting_user_reply"].includes(data.status);
+  return !!ticket && ["new", "awaiting_user_reply"].includes(ticket.status);
 }
 
 async function canResidentCancelTicket(
   ticket_id: string,
   condo_id: string
 ): Promise<boolean> {
-  const { data } = await supabase
-    .from("tickets")
-    .select("status, diagnosis_paid")
-    .eq("id", ticket_id)
-    .eq("condo_id", condo_id)
-    .maybeSingle();
+  const ticket = await safeMaybeSingle<{
+    status: string;
+    diagnosis_paid: boolean;
+  }>(
+    supabase
+      .from("tickets")
+      .select("status, diagnosis_paid")
+      .eq("id", ticket_id)
+      .eq("condo_id", condo_id)
+      .maybeSingle()
+  );
 
-  if (!data) return false;
-  if (data.diagnosis_paid) return false;
-  if (data.status === "completed") return false;
-
+  if (!ticket) return false;
+  if (ticket.diagnosis_paid) return false;
+  if (ticket.status === "completed") return false;
   return true;
 }
 
@@ -1035,21 +1040,20 @@ export async function residentAddMedia(params: {
   });
 }
 
-
 export async function handleAddMedia(body: any) {
-  const { condo_id, phone_number, media_url } = body;
+  const { phone_number, media_url } = body;
+  if (!media_url) return { handled: false };
 
-  if (!media_url) {
-    return { handled: false };
-  }
-
-  const file_url = media_url;
-
-  const { data: session } = await supabase
-    .from("conversation_sessions")
-    .select("current_ticket_id, state")
-    .eq("phone_number", phone_number)
-    .maybeSingle();
+  const session = await safeMaybeSingle<{
+    current_ticket_id: string;
+    state: string;
+  }>(
+    supabase
+      .from("conversation_sessions")
+      .select("current_ticket_id, state")
+      .eq("phone_number", phone_number)
+      .maybeSingle()
+  );
 
   if (!session || session.state !== "awaiting_media") {
     return { handled: false };
@@ -1057,20 +1061,30 @@ export async function handleAddMedia(body: any) {
 
   await residentAddMedia({
     ticket_id: session.current_ticket_id,
-    file_url
+    file_url: media_url
   });
 
-await supabase
-  .from("conversation_sessions")
-  .update({ state: "awaiting_resident_action" })
-  .eq("phone_number", phone_number);
+  const ticket = await safeMaybeSingle<{
+    language: "en" | "ms" | "zh" | "ta";
+  }>(
+    supabase
+      .from("tickets")
+      .select("language")
+      .eq("id", session.current_ticket_id)
+      .maybeSingle()
+  );
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_resident_action" })
+    .eq("phone_number", phone_number);
 
   return {
-  handled: true,
-  reply_text:
-    "Media received.\n\n" +
-    buildResidentMenu(ticket.language)
-};
+    handled: true,
+    reply_text:
+      "Media received.\n\n" +
+      buildResidentMenu(ticket?.language ?? "en")
+  };
 }
 
 
@@ -1142,11 +1156,16 @@ if (ticket.diagnosis_fee > 0 && !ticket.diagnosis_paid) {
 export async function handleEditText(body: any) {
   const { condo_id, phone_number, text } = body;
 
-  const { data: session } = await supabase
-    .from("conversation_sessions")
-    .select("current_ticket_id, state")
-    .eq("phone_number", phone_number)
-    .maybeSingle();
+  const session = await safeMaybeSingle<{
+    current_ticket_id: string;
+    state: string;
+  }>(
+    supabase
+      .from("conversation_sessions")
+      .select("current_ticket_id, state")
+      .eq("phone_number", phone_number)
+      .maybeSingle()
+  );
 
   if (!session || session.state !== "awaiting_edit_text") {
     return { handled: false };
@@ -1158,16 +1177,25 @@ export async function handleEditText(body: any) {
     new_description: text
   });
 
-await supabase
-  .from("conversation_sessions")
-  .update({ state: "awaiting_resident_action" })
-  .eq("phone_number", phone_number);
+  const ticket = await safeMaybeSingle<{
+    language: "en" | "ms" | "zh" | "ta";
+  }>(
+    supabase
+      .from("tickets")
+      .select("language")
+      .eq("id", session.current_ticket_id)
+      .maybeSingle()
+  );
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_resident_action" })
+    .eq("phone_number", phone_number);
 
   return {
-  handled: true,
-  reply_text:
-    "Edit updated.\n\n" +
-    buildResidentMenu(ticket.language)
-};
+    handled: true,
+    reply_text:
+      "Edit updated.\n\n" +
+      buildResidentMenu(ticket?.language ?? "en")
+  };
 }
-
