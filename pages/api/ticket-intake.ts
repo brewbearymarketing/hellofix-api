@@ -478,6 +478,23 @@ if (routed?.handled) {
     reply_text: routed.reply_text
   });
 }
+
+    /* ===== ROUTE EDIT TEXT FLOW ===== */
+const routedEdit = await handleEditText(body);
+if (routedEdit?.handled) {
+  return res.status(200).json({
+    success: true,
+    reply_text: routedEdit.reply_text
+  });
+}
+
+    /* ===== ROUTE MEDIA FLOW ===== */
+    const routedMedia = await handleAddMedia(body);
+if (routedMedia?.handled) {
+  return res.status(200).json({
+    success: true,
+    reply_text: routedMedia.reply_text
+  });
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
@@ -990,6 +1007,45 @@ export async function residentAddMedia(params: {
   });
 }
 
+
+export async function handleAddMedia(body: any) {
+  const { condo_id, phone_number, media_url } = body;
+
+  if (!media_url) {
+    return { handled: false };
+  }
+
+  const file_url = media_url;
+
+  const { data: session } = await supabase
+    .from("conversation_sessions")
+    .select("current_ticket_id, state")
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  if (!session || session.state !== "awaiting_media") {
+    return { handled: false };
+  }
+
+  await residentAddMedia({
+    ticket_id: session.current_ticket_id,
+    file_url
+  });
+
+await supabase
+  .from("conversation_sessions")
+  .update({ state: "awaiting_resident_action" })
+  .eq("phone_number", phone_number);
+
+  return {
+  handled: true,
+  reply_text:
+    "Media received.\n\n" +
+    buildResidentMenu(ticket.language)
+};
+}
+
+
 /* ================= 🔴 PAYMENT ================= */
 
 export async function createDiagnosisPayment(params: {
@@ -1074,11 +1130,16 @@ export async function handleEditText(body: any) {
     new_description: text
   });
 
-  await supabase
-    .from("conversation_sessions")
-    .delete()
-    .eq("phone_number", phone_number);
+await supabase
+  .from("conversation_sessions")
+  .update({ state: "awaiting_resident_action" })
+  .eq("phone_number", phone_number);
 
-  return { handled: true };
+  return {
+  handled: true,
+  reply_text:
+    "Edit updated.\n\n" +
+    buildResidentMenu(ticket.language)
+};
 }
 
