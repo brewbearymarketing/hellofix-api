@@ -689,6 +689,8 @@ export default async function handler(
   }
 }
 
+
+
 /* ================= 🔴 OWNERSHIP / STATUS GUARDS ================= */
 
 async function canResidentEditTicket(
@@ -837,6 +839,11 @@ export async function confirmDiagnosisPayment(payment_id: string) {
   await supabase.from("payments")
     .update({ status: "paid" })
     .eq("id", payment_id);
+
+    // 🔴 REQUIRED NULL GUARD (TypeScript)
+  if (error || !data) {
+    throw new Error("Payment not found");
+  }
 
   await supabase.from("tickets")
     .update({ diagnosis_paid: true, status: "paid" })
