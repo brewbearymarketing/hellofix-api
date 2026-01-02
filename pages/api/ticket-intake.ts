@@ -609,12 +609,17 @@ lang = existingTicket?.language ?? lang;
         const description_clean = await aiCleanDescription(description_raw);
 
        /* ===== VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
+    const resident = await safeMaybeSingle<{
+      unit_id: string;
+      approved: boolean;
+    }>(
+      supabase
+    .from("residents")
+    .select("unit_id, approved")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle()
+);
 
     if (!resident || !resident.approved) {
       return res.status(200).json({
