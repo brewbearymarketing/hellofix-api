@@ -20,10 +20,7 @@ console.log("OPENAI ENABLED:", !!openai);
 
 /**
  * Supabase-safe wrapper for maybeSingle()
- * - Accepts a function that returns a PostgrestBuilder
- * - Awaits it internally
- * - Returns T | null
- * - Eliminates TS narrowing issues permanently
+ * Preserves generic type T so TS never infers `never`
  */
 async function safeMaybeSingle<T>(
   builder: {
@@ -37,6 +34,7 @@ async function safeMaybeSingle<T>(
   if (error) return null;
   return data;
 }
+
 
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
@@ -524,8 +522,11 @@ if (routedMedia?.handled) {
   /* =====================================================
        🔒 CHECK EXISTING CONVERSATION LANGUAGE
     ===================================================== */
-    const existingTicket = await safeMaybeSingle(
-    supabase
+    const existingTicket = await safeMaybeSingle<{
+  id: string;
+  language: "en" | "ms" | "zh" | "ta";
+}>(
+  supabase
     .from("tickets")
     .select("id, language")
     .eq("condo_id", condo_id)
@@ -533,9 +534,9 @@ if (routedMedia?.handled) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle()
-    );
+);
 
-    lang = existingTicket?.language ?? lang;
+lang = existingTicket?.language ?? lang;
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
