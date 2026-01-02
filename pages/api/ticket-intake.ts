@@ -689,7 +689,174 @@ export default async function handler(
   }
 }
 
+/* ================= 🔴 MENU BUILDER ================= */
+export function buildResidentMenu(
+  lang: "en" | "ms" | "zh" | "ta"
+) {
+  switch (lang) {
+    case "ms":
+      return (
+        "Apakah tindakan seterusnya?\n" +
+        "1️⃣ Edit laporan\n" +
+        "2️⃣ Tambah gambar / video\n" +
+        "3️⃣ Batalkan laporan\n" +
+        "4️⃣ Buat bayaran pemeriksaan"
+      );
 
+    case "zh":
+      return (
+        "接下来您要做什么？\n" +
+        "1️⃣ 编辑工单\n" +
+        "2️⃣ 添加照片 / 视频\n" +
+        "3️⃣ 取消工单\n" +
+        "4️⃣ 支付检查费用"
+      );
+
+    case "ta":
+      return (
+        "அடுத்ததாக என்ன செய்ய விரும்புகிறீர்கள்?\n" +
+        "1️⃣ டிக்கெட்டை திருத்து\n" +
+        "2️⃣ படம் / வீடியோ சேர்க்கவும்\n" +
+        "3️⃣ டிக்கெட்டை ரத்து செய்\n" +
+        "4️⃣ பரிசோதனை கட்டணம் செலுத்தவும்"
+      );
+
+    default:
+      return (
+        "What would you like to do next?\n" +
+        "1️⃣ Edit ticket\n" +
+        "2️⃣ Add photo / video\n" +
+        "3️⃣ Cancel ticket\n" +
+        "4️⃣ Pay diagnosis fee"
+      );
+  }
+}
+
+/* ================= 🔴 CREATE SESSION AFTER TICKET CREATED ================= */
+export async function createPostTicketSession(params: {
+  condo_id: string;
+  phone_number: string;
+  ticket_id: string;
+}) {
+  const { condo_id, phone_number, ticket_id } = params;
+
+  await supabase.from("conversation_sessions").insert({
+    condo_id,
+    phone_number,
+    current_ticket_id: ticket_id,
+    state: "awaiting_resident_action"
+  });
+}
+
+/* ================= 🔴 NUMERIC ROUTER (LANG FROM TICKET) ================= */
+export async function routeNumericResidentAction(body: any) {
+  const text = body.text?.trim();
+  if (!["1", "2", "3", "4"].includes(text)) {
+    return { handled: false };
+  }
+
+  const { condo_id, phone_number } = body;
+
+  const { data: session } = await supabase
+    .from("conversation_sessions")
+    .select("current_ticket_id, state")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  if (!session || session.state !== "awaiting_resident_action") {
+    return { handled: false };
+  }
+
+  // 🔴 FETCH LANGUAGE FROM TICKET (SOURCE OF TRUTH)
+  const { data: ticket } = await supabase
+    .from("tickets")
+    .select("language")
+    .eq("id", session.current_ticket_id)
+    .single();
+
+  const lang = ticket?.language ?? "en";
+
+  const ticket_id = session.current_ticket_id;
+
+  switch (text) {
+    case "1":
+      await supabase
+        .from("conversation_sessions")
+        .update({ state: "awaiting_edit_text" })
+        .eq("phone_number", phone_number);
+
+      return {
+        handled: true,
+        reply_text:
+          lang === "ms"
+            ? "Sila hantar penerangan baharu untuk laporan anda."
+            : lang === "zh"
+            ? "请发送新的问题描述。"
+            : lang === "ta"
+            ? "புதிய விளக்கத்தை அனுப்பவும்."
+            : "Please send the new description for your ticket."
+      };
+
+    case "2":
+      await supabase
+        .from("conversation_sessions")
+        .update({ state: "awaiting_media" })
+        .eq("phone_number", phone_number);
+
+      return {
+        handled: true,
+        reply_text:
+          lang === "ms"
+            ? "Sila hantar gambar atau video sekarang."
+            : lang === "zh"
+            ? "请发送照片或视频。"
+            : lang === "ta"
+            ? "புகைப்படம் அல்லது வீடியோ அனுப்பவும்."
+            : "Please send photo or video now."
+      };
+
+    case "3":
+      await residentCancelTicket({ ticket_id, condo_id });
+
+      await supabase
+        .from("conversation_sessions")
+        .delete()
+        .eq("phone_number", phone_number);
+
+      return {
+        handled: true,
+        reply_text:
+          lang === "ms"
+            ? "Laporan anda telah dibatalkan."
+            : lang === "zh"
+            ? "您的工单已取消。"
+            : lang === "ta"
+            ? "உங்கள் டிக்கெட் ரத்து செய்யப்பட்டது."
+            : "Your ticket has been cancelled."
+      };
+
+    case "4":
+      await createDiagnosisPayment({
+        ticket_id,
+        provider: "manual"
+      });
+
+      return {
+        handled: true,
+        reply_text:
+          lang === "ms"
+            ? "Permintaan bayaran telah dibuat. Sila teruskan bayaran."
+            : lang === "zh"
+            ? "付款请求已创建，请继续付款。"
+            : lang === "ta"
+            ? "பணம் செலுத்தும் கோரிக்கை உருவாக்கப்பட்டுள்ளது."
+            : "Payment request created. Please proceed to payment."
+      };
+  }
+
+  return { handled: false };
+}
 
 /* ================= 🔴 OWNERSHIP / STATUS GUARDS ================= */
 
@@ -836,14 +1003,14 @@ export async function confirmDiagnosisPayment(payment_id: string) {
     .eq("id", payment_id)
     .single();
 
-  await supabase.from("payments")
-    .update({ status: "paid" })
-    .eq("id", payment_id);
-
-    // 🔴 REQUIRED NULL GUARD (TypeScript)
+      // 🔴 REQUIRED NULL GUARD (TypeScript)
   if (Error || !data) {
     throw new Error("Payment not found");
   }
+
+  await supabase.from("payments")
+    .update({ status: "paid" })
+    .eq("id", payment_id);
 
   await supabase.from("tickets")
     .update({ diagnosis_paid: true, status: "paid" })
@@ -864,3 +1031,33 @@ export async function confirmDiagnosisPayment(payment_id: string) {
 if (ticket.diagnosis_fee > 0 && !ticket.diagnosis_paid) {
   return; // block contractor notification
 }
+
+/* ================= 🔴 EDIT TEXT HANDLER API ================= */
+
+export async function handleEditText(body: any) {
+  const { condo_id, phone_number, text } = body;
+
+  const { data: session } = await supabase
+    .from("conversation_sessions")
+    .select("current_ticket_id, state")
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  if (!session || session.state !== "awaiting_edit_text") {
+    return { handled: false };
+  }
+
+  await residentEditTicket({
+    ticket_id: session.current_ticket_id,
+    condo_id,
+    new_description: text
+  });
+
+  await supabase
+    .from("conversation_sessions")
+    .delete()
+    .eq("phone_number", phone_number);
+
+  return { handled: true };
+}
+
