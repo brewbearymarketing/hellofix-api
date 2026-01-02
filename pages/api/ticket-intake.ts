@@ -19,16 +19,21 @@ console.log("OPENAI ENABLED:", !!openai);
 /* ================= 🔐 TYPESAFE SUPABASE HELPER ================= */
 
 /**
- * Wraps Supabase maybeSingle() and returns a stable, TS-safe value.
- * - No throwing
- * - No logic change
- * - Eliminates "possibly null" narrowing issues
+ * Supabase-safe wrapper for maybeSingle()
+ * - Accepts a function that returns a PostgrestBuilder
+ * - Awaits it internally
+ * - Returns T | null
+ * - Eliminates TS narrowing issues permanently
  */
 async function safeMaybeSingle<T>(
-  query: Promise<{ data: T | null; error: any }>
+  builder: {
+    then: (
+      onfulfilled: (value: { data: T | null; error: any }) => any,
+      onrejected?: (reason: any) => any
+    ) => any;
+  }
 ): Promise<T | null> {
-  const { data, error } = await query;
-
+  const { data, error } = await builder;
   if (error) return null;
   return data;
 }
