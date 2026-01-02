@@ -16,6 +16,23 @@ const openai = process.env.OPENAI_API_KEY
 console.log("OPENAI ENABLED:", !!openai);
 
 /* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
+/* ================= 🔐 TYPESAFE SUPABASE HELPER ================= */
+
+/**
+ * Wraps Supabase maybeSingle() and returns a stable, TS-safe value.
+ * - No throwing
+ * - No logic change
+ * - Eliminates "possibly null" narrowing issues
+ */
+async function safeMaybeSingle<T>(
+  query: Promise<{ data: T | null; error: any }>
+): Promise<T | null> {
+  const { data, error } = await query;
+
+  if (error) return null;
+  return data;
+}
+
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
 const THROTTLE_SOFT_LIMIT = 5;
@@ -502,14 +519,16 @@ if (routedMedia?.handled) {
   /* =====================================================
        🔒 CHECK EXISTING CONVERSATION LANGUAGE
     ===================================================== */
-    const { data: existingTicket } = await supabase
-      .from("tickets")
-      .select("id, language")
-      .eq("condo_id", condo_id)
-      .eq("status", "new")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const existingTicket = await safeMaybeSingle(
+    supabase
+    .from("tickets")
+    .select("id, language")
+    .eq("condo_id", condo_id)
+    .eq("status", "new")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+    );
 
     lang = existingTicket?.language ?? lang;
 
