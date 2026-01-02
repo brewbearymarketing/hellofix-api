@@ -841,7 +841,7 @@ export async function confirmDiagnosisPayment(payment_id: string) {
     .eq("id", payment_id);
 
     // 🔴 REQUIRED NULL GUARD (TypeScript)
-  if (error || !data) {
+  if (Error || !data) {
     throw new Error("Payment not found");
   }
 
