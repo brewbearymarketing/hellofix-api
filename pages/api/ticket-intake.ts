@@ -511,8 +511,8 @@ if (routedMedia?.handled) {
       .limit(1)
       .maybeSingle();
 
-    if (existingTicket?.language) {
-      lang = existingTicket.language;
+    if (existingTicket && existingTicket.language) {
+    lang = existingTicket.language;
     }
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
