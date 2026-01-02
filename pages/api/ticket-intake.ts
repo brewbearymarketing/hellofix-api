@@ -511,9 +511,7 @@ if (routedMedia?.handled) {
       .limit(1)
       .maybeSingle();
 
-    if (existingTicket && existingTicket.language) {
-    lang = existingTicket.language;
-    }
+    lang = existingTicket?.language ?? lang;
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
