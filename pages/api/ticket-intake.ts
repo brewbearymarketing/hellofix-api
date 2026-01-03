@@ -16,26 +16,6 @@ const openai = process.env.OPENAI_API_KEY
 console.log("OPENAI ENABLED:", !!openai);
 
 /* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
-/* ================= 🔐 TYPESAFE SUPABASE HELPER ================= */
-
-/**
- * Supabase-safe wrapper for maybeSingle()
- * Preserves generic type T so TS never infers `never`
- */
-async function safeMaybeSingle<T>(
-  builder: {
-    then: (
-      onfulfilled: (value: { data: T | null; error: any }) => any,
-      onrejected?: (reason: any) => any
-    ) => any;
-  }
-): Promise<T | null> {
-  const { data, error } = await builder;
-  if (error) return null;
-  return data;
-}
-
-
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
 const THROTTLE_SOFT_LIMIT = 5;
@@ -489,54 +469,55 @@ export default async function handler(
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-     /* ===== IF NUMERIC FLOW EXIST, HANDLE IT ===== */
-const routed = await routeNumericResidentAction(body);
+    /* ===== CONVERSATION STATE (EARLY ROUTER) ===== */
+  const { data: session } = await supabase
+  .from("conversation_sessions")
+  .select("id, state, current_ticket_id, language")
+  .eq("condo_id", condo_id)
+  .eq("phone_number", phone_number)
+  .maybeSingle();
 
-if (routed?.handled) {
-  return res.status(200).json({
-    success: true,
-    reply_text: routed.reply_text
-  });
-}
+  const conversationState =
+  session?.state ?? "intake";
 
-    /* ===== ROUTE EDIT TEXT FLOW ===== */
-const routedEdit = await handleEditText(body);
-if (routedEdit?.handled) {
-  return res.status(200).json({
-    success: true,
-    reply_text: routedEdit.reply_text
-  });
-}
-
-    /* ===== ROUTE MEDIA FLOW ===== */
-    const routedMedia = await handleAddMedia(body);
-if (routedMedia?.handled) {
-  return res.status(200).json({
-    success: true,
-    reply_text: routedMedia.reply_text
-  });
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
-  /* =====================================================
-       🔒 CHECK EXISTING CONVERSATION LANGUAGE
-    ===================================================== */
-    const existingTicket = await safeMaybeSingle<{
-  id: string;
-  language: "en" | "ms" | "zh" | "ta";
-}>(
-  supabase
-    .from("tickets")
-    .select("id, language")
-    .eq("condo_id", condo_id)
-    .eq("status", "new")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
-);
+  /* ============CHECK EXISTING CONVERSATION LANGUAGE================ */
+    const { data: existingTicket } = await supabase
+      .from("tickets")
+      .select("id, language")
+      .eq("condo_id", condo_id)
+      .eq("status", "new")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-lang = existingTicket?.language ?? lang;
+    if (existingTicket?.language) {
+      lang = existingTicket.language;
+    }
+
+    /* ============CONVERSATION STATE CHANNEL================ */
+    if (conversationState !== "intake") {
+  switch (conversationState) {
+    case "draft_edit":
+      return handleDraftEdit(req, res, session);
+
+    case "awaiting_confirmation":
+      return handleConfirmation(req, res, session);
+
+    case "awaiting_payment":
+      return handlePayment(req, res, session);
+
+    case "closed":
+      return res.status(200).json({ success: true });
+
+    default:
+      // safety fallback
+      break;
+  }
+}
 
     /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
@@ -609,33 +590,24 @@ lang = existingTicket?.language ?? lang;
         const description_clean = await aiCleanDescription(description_raw);
 
        /* ===== VERIFY RESIDENT ===== */
-    const resident = await safeMaybeSingle<{
-      unit_id: string;
-      approved: boolean;
-    }>(
-      supabase
-    .from("residents")
-    .select("unit_id, approved")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle()
-);
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
 
-if (!resident) {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan."
-  });
-}
+    if (!resident || !resident.approved) {
+      return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
+});
 
-if (!resident.approved) {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan."
-  });
-}
+    }
+
+    const unit_id = resident.unit_id;
 
     /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
@@ -685,7 +657,19 @@ if (!resident.approved) {
       .select()
       .single();
 
-    if (error || !ticket) throw error;
+      if (error || !ticket) throw error;
+    
+/* ===== 🔒 SET CONVERSATION STATE AFTER INTAKE ===== */
+      await supabase
+      .from("conversation_sessions")
+      .upsert({
+      condo_id,
+      phone_number,
+      current_ticket_id: ticket.id,
+      state: "awaiting_confirmation",
+      language: lang,
+      updated_at: new Date()
+      });
 
     /* ===== EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
@@ -733,23 +717,12 @@ if (!resident.approved) {
       }
     }
 
-// 🔴 ADD THIS BEFORE RETURN
-await createPostTicketSession({
-  condo_id,
-  phone_number,
-  ticket_id: ticket.id
-});
-
-return res.status(200).json({
-  success: true,
-  ticket_id: ticket.id,
-  intent_category,
-  reply_text:
-    buildReplyText(lang, "confirmed", ticket.id) +
-    "\n\n" +
-    buildResidentMenu(lang)
-});
-
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
+      intent_category,
+      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+    });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
@@ -759,447 +732,150 @@ return res.status(200).json({
   }
 }
 
-/* ================= 🔴 MENU BUILDER ================= */
-export function buildResidentMenu(
-  lang: "en" | "ms" | "zh" | "ta"
+/* =====================================================
+   FOLLOW-UP HANDLERS (NO AI / NO THROTTLE)
+===================================================== */
+
+async function handleConfirmation(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
 ) {
-  switch (lang) {
-    case "ms":
-      return (
-        "Apakah tindakan seterusnya?\n" +
-        "1️⃣ Edit laporan\n" +
-        "2️⃣ Tambah gambar / video\n" +
-        "3️⃣ Batalkan laporan\n" +
-        "4️⃣ Buat bayaran pemeriksaan"
-      );
+  const text = req.body.description_raw?.trim();
 
-    case "zh":
-      return (
-        "接下来您要做什么？\n" +
-        "1️⃣ 编辑工单\n" +
-        "2️⃣ 添加照片 / 视频\n" +
-        "3️⃣ 取消工单\n" +
-        "4️⃣ 支付检查费用"
-      );
-
-    case "ta":
-      return (
-        "அடுத்ததாக என்ன செய்ய விரும்புகிறீர்கள்?\n" +
-        "1️⃣ டிக்கெட்டை திருத்து\n" +
-        "2️⃣ படம் / வீடியோ சேர்க்கவும்\n" +
-        "3️⃣ டிக்கெட்டை ரத்து செய்\n" +
-        "4️⃣ பரிசோதனை கட்டணம் செலுத்தவும்"
-      );
-
-    default:
-      return (
-        "What would you like to do next?\n" +
-        "1️⃣ Edit ticket\n" +
-        "2️⃣ Add photo / video\n" +
-        "3️⃣ Cancel ticket\n" +
-        "4️⃣ Pay diagnosis fee"
-      );
-  }
-}
-
-/* ================= 🔴 CREATE SESSION AFTER TICKET CREATED ================= */
-export async function createPostTicketSession(params: {
-  condo_id: string;
-  phone_number: string;
-  ticket_id: string;
-}) {
-  const { condo_id, phone_number, ticket_id } = params;
-
-  await supabase.from("conversation_sessions").insert({
-    condo_id,
-    phone_number,
-    current_ticket_id: ticket_id,
-    state: "awaiting_resident_action"
-  });
-}
-
-/* ================= 🔴 NUMERIC ROUTER (LANG FROM TICKET) ================= */
-export async function routeNumericResidentAction(body: any) {
-  const text = body.text?.trim();
-  if (!["1", "2", "3", "4"].includes(text)) {
-    return { handled: false };
+  if (!["1", "2", "3"].includes(text)) {
+    return res.status(200).json({
+      success: true,
+      reply_text: "Please reply with 1, 2, or 3 only."
+    });
   }
 
-  const { condo_id, phone_number } = body;
+  const ticketId = session.current_ticket_id;
 
-  const { data: session } = await supabase
-    .from("conversation_sessions")
-    .select("current_ticket_id, state")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
-
-  if (!session || session.state !== "awaiting_resident_action") {
-    return { handled: false };
-  }
-
-  // 🔴 FETCH LANGUAGE FROM TICKET (SOURCE OF TRUTH)
-  const { data: ticket } = await supabase
-    .from("tickets")
-    .select("language")
-    .eq("id", session.current_ticket_id)
-    .single();
-
-  const lang = ticket?.language ?? "en";
-
-  const ticket_id = session.current_ticket_id;
-
-  switch (text) {
-    case "1":
-      await supabase
-        .from("conversation_sessions")
-        .update({ state: "awaiting_edit_text" })
-        .eq("phone_number", phone_number);
-
-      return {
-        handled: true,
-        reply_text:
-          lang === "ms"
-            ? "Sila hantar penerangan baharu untuk laporan anda."
-            : lang === "zh"
-            ? "请发送新的问题描述。"
-            : lang === "ta"
-            ? "புதிய விளக்கத்தை அனுப்பவும்."
-            : "Please send the new description for your ticket."
-      };
-
-    case "2":
-      await supabase
-        .from("conversation_sessions")
-        .update({ state: "awaiting_media" })
-        .eq("phone_number", phone_number);
-
-      return {
-        handled: true,
-        reply_text:
-          lang === "ms"
-            ? "Sila hantar gambar atau video sekarang."
-            : lang === "zh"
-            ? "请发送照片或视频。"
-            : lang === "ta"
-            ? "புகைப்படம் அல்லது வீடியோ அனுப்பவும்."
-            : "Please send photo or video now."
-      };
-
-    case "3":
-      await residentCancelTicket({ ticket_id, condo_id });
-
-      await supabase
-        .from("conversation_sessions")
-        .delete()
-        .eq("phone_number", phone_number);
-
-      return {
-        handled: true,
-        reply_text:
-          lang === "ms"
-            ? "Laporan anda telah dibatalkan."
-            : lang === "zh"
-            ? "您的工单已取消。"
-            : lang === "ta"
-            ? "உங்கள் டிக்கெட் ரத்து செய்யப்பட்டது."
-            : "Your ticket has been cancelled."
-      };
-
-    case "4":
-      await createDiagnosisPayment({
-        ticket_id,
-        provider: "manual"
-      });
-
-      return {
-        handled: true,
-        reply_text:
-          lang === "ms"
-            ? "Permintaan bayaran telah dibuat. Sila teruskan bayaran."
-            : lang === "zh"
-            ? "付款请求已创建，请继续付款。"
-            : lang === "ta"
-            ? "பணம் செலுத்தும் கோரிக்கை உருவாக்கப்பட்டுள்ளது."
-            : "Payment request created. Please proceed to payment."
-      };
-  }
-
-  return { handled: false };
-}
-
-/* ================= 🔴 OWNERSHIP / STATUS GUARDS ================= */
-
-async function canResidentEditTicket(
-  ticket_id: string,
-  condo_id: string
-): Promise<boolean> {
-  const ticket = await safeMaybeSingle<{ status: string }>(
-    supabase
+  if (text === "1") {
+    await supabase
       .from("tickets")
-      .select("status")
-      .eq("id", ticket_id)
-      .eq("condo_id", condo_id)
-      .maybeSingle()
-  );
+      .update({ status: "confirmed" })
+      .eq("id", ticketId);
 
-  return !!ticket && ["new", "awaiting_user_reply"].includes(ticket.status);
-}
-
-async function canResidentCancelTicket(
-  ticket_id: string,
-  condo_id: string
-): Promise<boolean> {
-  const ticket = await safeMaybeSingle<{
-    status: string;
-    diagnosis_paid: boolean;
-  }>(
-    supabase
-      .from("tickets")
-      .select("status, diagnosis_paid")
-      .eq("id", ticket_id)
-      .eq("condo_id", condo_id)
-      .maybeSingle()
-  );
-
-  if (!ticket) return false;
-  if (ticket.diagnosis_paid) return false;
-  if (ticket.status === "completed") return false;
-  return true;
-}
-
-/* ================= 🔴 EDIT TICKET ================= */
-
-export async function residentEditTicket(params: {
-  ticket_id: string;
-  condo_id: string;
-  new_description: string;
-}) {
-  const { ticket_id, condo_id, new_description } = params;
-
-  if (!(await canResidentEditTicket(ticket_id, condo_id))) {
-    throw new Error("Edit not allowed");
-  }
-
-  const description_clean = await aiCleanDescription(new_description);
-  const intent = await aiClassify(new_description);
-
-  await supabase.from("tickets").update({
-    description_raw: new_description,
-    description_clean,
-    intent_category: intent.category,
-    intent_confidence: intent.confidence,
-    updated_at: new Date()
-  }).eq("id", ticket_id);
-
-  await supabase.from("ticket_events").insert({
-    ticket_id,
-    event_type: "resident_edit",
-    actor_role: "resident"
-  });
-}
-
-/* ================= 🔴 CANCEL TICKET ================= */
-
-export async function residentCancelTicket(params: {
-  ticket_id: string;
-  condo_id: string;
-}) {
-  const { ticket_id, condo_id } = params;
-
-  if (!(await canResidentCancelTicket(ticket_id, condo_id))) {
-    throw new Error("Cancel not allowed");
-  }
-
-  await supabase.from("tickets").update({
-    status: "cancelled",
-    updated_at: new Date()
-  }).eq("id", ticket_id);
-
-  await supabase.from("ticket_events").insert({
-    ticket_id,
-    event_type: "resident_cancel",
-    actor_role: "resident"
-  });
-}
-
-/* ================= 🔴 ADD MEDIA ================= */
-
-export async function residentAddMedia(params: {
-  ticket_id: string;
-  file_url: string;
-}) {
-  const { ticket_id, file_url } = params;
-
-  await supabase.from("ticket_evidence").insert({
-    ticket_id,
-    file_url,
-    created_at: new Date()
-  });
-
-  await supabase.from("ticket_events").insert({
-    ticket_id,
-    event_type: "resident_add_media",
-    actor_role: "resident"
-  });
-}
-
-export async function handleAddMedia(body: any) {
-  const { phone_number, media_url } = body;
-  if (!media_url) return { handled: false };
-
-  const session = await safeMaybeSingle<{
-    current_ticket_id: string;
-    state: string;
-  }>(
-    supabase
+    await supabase
       .from("conversation_sessions")
-      .select("current_ticket_id, state")
-      .eq("phone_number", phone_number)
-      .maybeSingle()
-  );
+      .update({ state: "awaiting_payment" })
+      .eq("id", session.id);
 
-  if (!session || session.state !== "awaiting_media") {
-    return { handled: false };
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed."
+    });
   }
 
-  await residentAddMedia({
-    ticket_id: session.current_ticket_id,
-    file_url: media_url
-  });
+  if (text === "2") {
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "draft_edit" })
+      .eq("id", session.id);
 
-  const ticket = await safeMaybeSingle<{
-    language: "en" | "ms" | "zh" | "ta";
-  }>(
-    supabase
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        "✏️ Please reply with the corrected issue description."
+    });
+  }
+
+  if (text === "3") {
+    await supabase
       .from("tickets")
-      .select("language")
-      .eq("id", session.current_ticket_id)
-      .maybeSingle()
-  );
+      .update({ status: "cancelled" })
+      .eq("id", ticketId);
+
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "closed",
+        current_ticket_id: null
+      })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text: "❌ Ticket cancelled."
+    });
+  }
+}
+
+async function handleDraftEdit(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const newText = req.body.description_raw?.trim();
+
+  if (!newText || newText.length < 10) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        "Please provide a clearer description of the issue."
+    });
+  }
+
+  await supabase
+    .from("ticket_drafts")
+    .insert({
+      ticket_id: session.current_ticket_id,
+      description_raw: newText
+    });
 
   await supabase
     .from("conversation_sessions")
-    .update({ state: "awaiting_resident_action" })
-    .eq("phone_number", phone_number);
+    .update({ state: "awaiting_confirmation" })
+    .eq("id", session.id);
 
-  return {
-    handled: true,
+  return res.status(200).json({
+    success: true,
     reply_text:
-      "Media received.\n\n" +
-      buildResidentMenu(ticket?.language ?? "en")
-  };
-}
-
-
-/* ================= 🔴 PAYMENT ================= */
-
-export async function createDiagnosisPayment(params: {
-  ticket_id: string;
-  provider: string;
-}) {
-  const { ticket_id, provider } = params;
-
-  const { data: ticket } = await supabase
-    .from("tickets")
-    .select("diagnosis_fee, diagnosis_paid")
-    .eq("id", ticket_id)
-    .maybeSingle();
-
-  if (!ticket || ticket.diagnosis_paid || ticket.diagnosis_fee <= 0) {
-    throw new Error("Payment not required");
-  }
-
-  return await supabase.from("payments").insert({
-    ticket_id,
-    amount: ticket.diagnosis_fee,
-    status: "pending",
-    provider,
-    payment_type: "diagnosis"
+      "✏️ Description updated.\nReply 1️⃣ to confirm, 2️⃣ to edit again, 3️⃣ to cancel."
   });
 }
 
-export async function confirmDiagnosisPayment(payment_id: string) {
-  const { data } = await supabase
-    .from("payments")
-    .select("ticket_id")
-    .eq("id", payment_id)
-    .single();
+async function handlePayment(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim().toUpperCase();
+  const ticketId = session.current_ticket_id;
 
-      // 🔴 REQUIRED NULL GUARD (TypeScript)
-  if (Error || !data) {
-    throw new Error("Payment not found");
+  if (text === "PAY") {
+    return res.status(200).json({
+      success: true,
+      reply_text: "🔗 Payment link sent."
+    });
   }
 
-  await supabase.from("payments")
-    .update({ status: "paid" })
-    .eq("id", payment_id);
-
-  await supabase.from("tickets")
-    .update({ diagnosis_paid: true, status: "paid" })
-    .eq("id", data.ticket_id);
-
-  await supabase.from("ticket_events").insert({
-    ticket_id: data.ticket_id,
-    event_type: "resident_payment_confirmed",
-    actor_role: "system"
-  });
-}
-
-/* ================= 🔴 CONTRACTOR NOTIFICATION GUARD ================= */
-
-/*
-🔴 ADD THIS CHECK wherever contractor is notified:
-
-if (ticket.diagnosis_fee > 0 && !ticket.diagnosis_paid) {
-  return; // block contractor notification
-}
-
-/* ================= 🔴 EDIT TEXT HANDLER API ================= */
-
-export async function handleEditText(body: any) {
-  const { condo_id, phone_number, text } = body;
-
-  const session = await safeMaybeSingle<{
-    current_ticket_id: string;
-    state: string;
-  }>(
-    supabase
-      .from("conversation_sessions")
-      .select("current_ticket_id, state")
-      .eq("phone_number", phone_number)
-      .maybeSingle()
-  );
-
-  if (!session || session.state !== "awaiting_edit_text") {
-    return { handled: false };
-  }
-
-  await residentEditTicket({
-    ticket_id: session.current_ticket_id,
-    condo_id,
-    new_description: text
-  });
-
-  const ticket = await safeMaybeSingle<{
-    language: "en" | "ms" | "zh" | "ta";
-  }>(
-    supabase
+  if (text === "CANCEL") {
+    await supabase
       .from("tickets")
-      .select("language")
-      .eq("id", session.current_ticket_id)
-      .maybeSingle()
-  );
+      .update({ status: "cancelled" })
+      .eq("id", ticketId);
 
-  await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_resident_action" })
-    .eq("phone_number", phone_number);
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "closed",
+        current_ticket_id: null
+      })
+      .eq("id", session.id);
 
-  return {
-    handled: true,
-    reply_text:
-      "Edit updated.\n\n" +
-      buildResidentMenu(ticket?.language ?? "en")
-  };
+    return res.status(200).json({
+      success: true,
+      reply_text: "❌ Ticket cancelled."
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    reply_text: "Please reply PAY or CANCEL only."
+  });
 }
+
