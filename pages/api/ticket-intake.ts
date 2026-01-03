@@ -317,6 +317,7 @@ function buildReplyText(
   lang: "en" | "ms" | "zh" | "ta",
   type: "greeting" | "intake_received" | "confirmed",
   ticketId?: string
+  descriptionDisplay?: string
 ): string {
   if (type === "greeting") {
     switch (lang) {
@@ -332,8 +333,8 @@ function buildReplyText(
   }
 
 if (type === "intake_received") {
-  const issue = descriptionClean
-    ? `"${descriptionClean}"`
+  const issue = descriptionDisplay
+    ? `"${descriptionDisplay}"`
     : "";
 
   switch (lang) {
@@ -386,6 +387,92 @@ Please reply:
       return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
     default:
       return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+}
+
+/* ================= FOLLOW-UP REPLY TEXT ================= */
+function buildFollowUpReply(
+  lang: "en" | "ms" | "zh" | "ta",
+  type:
+    | "confirm_success"
+    | "ask_edit"
+    | "cancelled"
+    | "payment_prompt"
+    | "invalid_confirm"
+    | "invalid_payment"
+): string {
+  switch (type) {
+    case "confirm_success":
+      switch (lang) {
+        case "ms":
+          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30\nBalas PAY untuk teruskan pembayaran.";
+        case "zh":
+          return "✅ 工单已确认。\n检查费用：RM30\n回复 PAY 以继续付款。";
+        case "ta":
+          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30\nபணம் செலுத்த PAY என பதிலளிக்கவும்.";
+        default:
+          return "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed.";
+      }
+
+    case "ask_edit":
+      switch (lang) {
+        case "ms":
+          return "✏️ Sila balas dengan penerangan isu yang dikemaskini.";
+        case "zh":
+          return "✏️ 请回复更新后的问题描述。";
+        case "ta":
+          return "✏️ தயவுசெய்து திருத்தப்பட்ட பிரச்சனை விளக்கத்தை அனுப்பவும்.";
+        default:
+          return "✏️ Please reply with the corrected issue description.";
+      }
+
+    case "cancelled":
+      switch (lang) {
+        case "ms":
+          return "❌ Tiket telah dibatalkan.";
+        case "zh":
+          return "❌ 工单已取消。";
+        case "ta":
+          return "❌ டிக்கெட் ரத்து செய்யப்பட்டது.";
+        default:
+          return "❌ Ticket cancelled.";
+      }
+
+    case "payment_prompt":
+      switch (lang) {
+        case "ms":
+          return "💳 Balas PAY untuk membuat pembayaran atau CANCEL untuk batalkan tiket.";
+        case "zh":
+          return "💳 回复 PAY 进行付款，或回复 CANCEL 取消工单。";
+        case "ta":
+          return "💳 பணம் செலுத்த PAY அல்லது ரத்து செய்ய CANCEL என பதிலளிக்கவும்.";
+        default:
+          return "💳 Reply PAY to proceed or CANCEL to cancel the ticket.";
+      }
+
+    case "invalid_confirm":
+      switch (lang) {
+        case "ms":
+          return "Sila balas dengan 1, 2 atau 3 sahaja.";
+        case "zh":
+          return "请仅回复 1、2 或 3。";
+        case "ta":
+          return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
+        default:
+          return "Please reply with 1, 2, or 3 only.";
+      }
+
+    case "invalid_payment":
+      switch (lang) {
+        case "ms":
+          return "Sila balas PAY atau CANCEL sahaja.";
+        case "zh":
+          return "请仅回复 PAY 或 CANCEL。";
+        case "ta":
+          return "PAY அல்லது CANCEL மட்டுமே பதிலளிக்கவும்.";
+        default:
+          return "Please reply PAY or CANCEL only.";
+      }
   }
 }
 
@@ -806,7 +893,6 @@ export default async function handler(
       reply_text: buildReplyText(
   lang,
   "intake_received",
-  ticket.id,
   description_display
 )
     });
@@ -829,11 +915,12 @@ async function handleConfirmation(
   session: any
 ) {
   const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
 
   if (!["1", "2", "3"].includes(text)) {
     return res.status(200).json({
       success: true,
-      reply_text: "Please reply with 1, 2, or 3 only."
+      reply_text: buildFollowUpReply(lang, "invalid_confirm")
     });
   }
 
@@ -852,8 +939,7 @@ async function handleConfirmation(
 
     return res.status(200).json({
       success: true,
-      reply_text:
-        "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed."
+      reply_text: buildFollowUpReply(lang, "confirm_success")
     });
   }
 
@@ -865,8 +951,7 @@ async function handleConfirmation(
 
     return res.status(200).json({
       success: true,
-      reply_text:
-        "✏️ Please reply with the corrected issue description."
+      reply_text: buildFollowUpReply(lang, "ask_edit")
     });
   }
 
@@ -886,7 +971,7 @@ async function handleConfirmation(
 
     return res.status(200).json({
       success: true,
-      reply_text: "❌ Ticket cancelled."
+      reply_text: buildFollowUpReply(lang, "cancelled")
     });
   }
 }
@@ -932,11 +1017,12 @@ async function handlePayment(
 ) {
   const text = req.body.description_raw?.trim().toUpperCase();
   const ticketId = session.current_ticket_id;
+  const lang = session.language ?? "en";
 
   if (text === "PAY") {
     return res.status(200).json({
       success: true,
-      reply_text: "🔗 Payment link sent."
+      reply_text: buildFollowUpReply(lang, "payment_prompt")
     });
   }
 
@@ -956,7 +1042,7 @@ async function handlePayment(
 
     return res.status(200).json({
       success: true,
-      reply_text: "❌ Ticket cancelled."
+      reply_text: buildFollowUpReply(lang, "cancelled")
     });
   }
 
