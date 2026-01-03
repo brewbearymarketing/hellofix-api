@@ -332,7 +332,7 @@ function buildReplyText(
   }
 
 if (type === "intake_received") {
-  const issue = descriptionDisplay
+  const issue = descriptionClean
     ? `"${descriptionClean}"`
     : "";
 
