@@ -64,27 +64,34 @@ export default async function handler(
     const lang = ticket.language ?? "en";
 
     /* ================= IDEMPOTENCY CHECK (FOR PROTECTION AGAINST WEBHOOK RETRY) ================= */
-    const { data: existingPayment } = await supabase
-    .from("payments")
-    .select("id")
-    .eq("gateway_payment_id", payment_id)
-    .eq("status", "paid")
-    .maybeSingle();
+const refno = body.refno;
+const ticketId = body.order_id;
 
-    if (existingPayment) {
-    return res.status(200).json({ ok: true, duplicate: true });
-    }
+const { data: existingPayment } = await supabase
+  .from("payments")
+  .select("id")
+  .eq("gateway_payment_id", refno)
+  .eq("status", "paid")
+  .maybeSingle();
 
+if (existingPayment) {
+  return res.status(200).json({ ok: true, duplicate: true });
+}
 
     /* ================= INSERT PAYMENT ================= */
-    await supabase.from("payments").insert({
-    ticket_id: ticket.id,
-    gateway_payment_id: payment_id, // ← THIS IS THE KEY
-    amount,
-    status: "paid",
-    provider,
-    created_at: new Date()
-    });
+await supabase.from("payments").insert({
+  ticket_id: ticketId,
+  gateway_payment_id: refno,
+  amount: Number(body.amount),
+  status: "paid",
+  provider: "toyyibpay",
+  payment_type: "diagnosis_fee",
+  created_at: new Date()
+});
+
+if (body.status_id !== "1") {
+  return res.status(200).json({ ignored: true });
+}
 
     /* ================= UPDATE TICKET ================= */
     await supabase
