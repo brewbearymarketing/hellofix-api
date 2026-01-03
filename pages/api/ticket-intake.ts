@@ -983,13 +983,21 @@ async function handleDraftEdit(
 ) {
   const newText = req.body.description_raw?.trim();
 
-  if (!newText || newText.length < 10) {
-    return res.status(200).json({
-      success: true,
-      reply_text:
-        "Please provide a clearer description of the issue."
-    });
-  }
+const lang = session.language ?? "en";
+
+if (!newText || newText.length < 10) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "Sila berikan penerangan isu yang lebih jelas."
+        : lang === "zh"
+        ? "请提供更清楚的问题描述。"
+        : lang === "ta"
+        ? "தயவுசெய்து பிரச்சனையை தெளிவாக விவரிக்கவும்."
+        : "Please provide a clearer description of the issue."
+  });
+}
 
   await supabase
     .from("ticket_drafts")
@@ -1003,11 +1011,19 @@ async function handleDraftEdit(
     .update({ state: "awaiting_confirmation" })
     .eq("id", session.id);
 
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      "✏️ Description updated.\nReply 1️⃣ to confirm, 2️⃣ to edit again, 3️⃣ to cancel."
-  });
+const lang = session.language ?? "en";
+
+return res.status(200).json({
+  success: true,
+  reply_text:
+    lang === "ms"
+      ? "✏️ Keterangan telah dikemaskini.\n\nSila balas:\n1️⃣ Sahkan tiket\n2️⃣ Edit semula\n3️⃣ Batalkan tiket"
+      : lang === "zh"
+      ? "✏️ 描述已更新。\n\n请回复：\n1️⃣ 确认工单\n2️⃣ 再次编辑\n3️⃣ 取消工单"
+      : lang === "ta"
+      ? "✏️ விளக்கம் புதுப்பிக்கப்பட்டது.\n\nபதில்:\n1️⃣ டிக்கெட்டை உறுதி செய்ய\n2️⃣ மீண்டும் திருத்த\n3️⃣ டிக்கெட்டை ரத்து செய்ய"
+      : "✏️ Description updated.\n\nPlease reply:\n1️⃣ Confirm ticket\n2️⃣ Edit again\n3️⃣ Cancel ticket"
+});
 }
 
 async function handlePayment(
