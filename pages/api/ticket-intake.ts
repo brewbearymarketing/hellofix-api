@@ -1000,6 +1000,8 @@ if (!newText || newText.length < 10) {
   });
 }
 
+  const description_clean = await aiCleanDescription(newText);
+
   await supabase
     .from("tickets")
     .update({
