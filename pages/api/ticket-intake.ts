@@ -316,7 +316,7 @@ async function aiDetectLanguage(
 function buildReplyText(
   lang: "en" | "ms" | "zh" | "ta",
   type: "greeting" | "intake_received" | "confirmed",
-  ticketId?: string
+  ticketId?: string,
   descriptionDisplay?: string
 ): string {
   if (type === "greeting") {
