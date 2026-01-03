@@ -1033,12 +1033,44 @@ return res.status(200).json({
   success: true,
   reply_text:
     lang === "ms"
-      ? "✏️ Keterangan telah dikemaskini.\n\nSila balas:\n1️⃣ Sahkan tiket\n2️⃣ Edit semula\n3️⃣ Batalkan tiket"
+      ? `✏️ Keterangan telah dikemaskini.
+
+Kami memahami isu anda berkaitan:
+"${description_display}"
+
+Sila balas:
+1️⃣ Sahkan tiket
+2️⃣ Edit semula
+3️⃣ Batalkan tiket`
       : lang === "zh"
-      ? "✏️ 描述已更新。\n\n请回复：\n1️⃣ 确认工单\n2️⃣ 再次编辑\n3️⃣ 取消工单"
+      ? `✏️ 描述已更新。
+
+我们理解您的问题是关于：
+"${description_display}"
+
+请回复：
+1️⃣ 确认工单
+2️⃣ 再次编辑
+3️⃣ 取消工单`
       : lang === "ta"
-      ? "✏️ விளக்கம் புதுப்பிக்கப்பட்டது.\n\nபதில்:\n1️⃣ டிக்கெட்டை உறுதி செய்ய\n2️⃣ மீண்டும் திருத்த\n3️⃣ டிக்கெட்டை ரத்து செய்ய"
-      : "✏️ Description updated.\n\nPlease reply:\n1️⃣ Confirm ticket\n2️⃣ Edit again\n3️⃣ Cancel ticket"
+      ? `✏️ விளக்கம் புதுப்பிக்கப்பட்டது.
+
+உங்கள் பிரச்சனை தொடர்புடையது:
+"${description_display}"
+
+பதில்:
+1️⃣ டிக்கெட்டை உறுதி செய்ய
+2️⃣ மீண்டும் திருத்த
+3️⃣ டிக்கெட்டை ரத்து செய்ய`
+      : `✏️ Description updated.
+
+We understand your issue relates to:
+"${description_display}"
+
+Please reply:
+1️⃣ Confirm ticket
+2️⃣ Edit again
+3️⃣ Cancel ticket`
 });
 }
 
