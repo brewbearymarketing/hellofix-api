@@ -936,7 +936,7 @@ async function handleConfirmation(
 
     await supabase
       .from("conversation_sessions")
-      .update({ state: "intake" })
+      .update({ state: "awaiting_payment" })
       .eq("id", session.id);
 
     const paymentUrl =
@@ -1119,7 +1119,7 @@ async function handlePayment(
     return res.status(200).json({
       success: true,
       reply_text: buildFollowUpReply(lang, "cancelled")
-    });
+    }); 
   }
 
   return res.status(200).json({
