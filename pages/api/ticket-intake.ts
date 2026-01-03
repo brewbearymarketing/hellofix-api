@@ -283,7 +283,7 @@ async function aiDetectLanguage(
 /* ================= BANK GRADE REPLY GENERATOR ================= */
 function buildReplyText(
   lang: "en" | "ms" | "zh" | "ta",
-  type: "greeting" | "confirmed",
+  type: "greeting" | "intake_received" | "confirmed",
   ticketId?: string
 ): string {
   if (type === "greeting") {
@@ -299,6 +299,43 @@ function buildReplyText(
     }
   }
 
+if (type === "intake_received") {
+  switch (lang) {
+    case "zh":
+      return `🛠 维修工单已记录。
+
+请回复：
+1️⃣ 确认工单
+2️⃣ 编辑描述
+3️⃣ 取消工单`;
+
+    case "ta":
+      return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
+
+பதில்:
+1️⃣ டிக்கெட்டை உறுதி செய்ய
+2️⃣ விளக்கத்தை திருத்த
+3️⃣ டிக்கெட்டை ரத்து செய்ய`;
+
+    case "ms":
+      return `🛠 Laporan penyelenggaraan telah direkodkan.
+
+Sila balas:
+1️⃣ Sahkan tiket
+2️⃣ Edit keterangan
+3️⃣ Batalkan tiket`;
+
+    default:
+      return `🛠 Maintenance ticket recorded.
+
+Please reply:
+1️⃣ Confirm ticket
+2️⃣ Edit description
+3️⃣ Cancel ticket`;
+  }
+}
+
+  
   // confirmed
   switch (lang) {
     case "zh":
@@ -721,7 +758,7 @@ export default async function handler(
       success: true,
       ticket_id: ticket.id,
       intent_category,
-      reply_text: buildReplyText(lang, "confirmed", ticket.id)
+      reply_text: buildReplyText(lang, "intake_received", ticket.id)
     });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
