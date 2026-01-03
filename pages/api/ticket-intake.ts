@@ -753,12 +753,10 @@ export default async function handler(
 
         const description_clean = await aiCleanDescription(description_raw);
 
-    const latestClean = updatedTicket?.description_clean ?? description_clean;
-
 const description_display =
   lang === "en"
-    ? latestClean
-    : await aiTranslateForDisplay(latestClean, lang);
+    ? description_clean
+    : await aiTranslateForDisplay(description_clean, lang);
 
 
        /* ===== VERIFY RESIDENT ===== */
