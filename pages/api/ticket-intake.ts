@@ -987,7 +987,7 @@ if (!newText || newText.length < 10) {
   return res.status(200).json({
     success: true,
     reply_text:
-      lang === "ms"
+        : lang === "ms"
         ? "Sila berikan penerangan isu yang lebih jelas."
         : lang === "zh"
         ? "请提供更清楚的问题描述。"
