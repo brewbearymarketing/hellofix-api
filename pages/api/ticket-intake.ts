@@ -893,6 +893,7 @@ export default async function handler(
       reply_text: buildReplyText(
   lang,
   "intake_received",
+  undefined,
   description_display
 )
     });
@@ -987,7 +988,7 @@ if (!newText || newText.length < 10) {
   return res.status(200).json({
     success: true,
     reply_text:
-        : lang === "ms"
+    lang === "ms"
         ? "Sila berikan penerangan isu yang lebih jelas."
         : lang === "zh"
         ? "请提供更清楚的问题描述。"
@@ -1060,7 +1061,7 @@ async function handlePayment(
 
   return res.status(200).json({
     success: true,
-    reply_text: "Please reply PAY or CANCEL only."
+    reply_text: buildFollowUpReply(lang, "invalid_payment")
   });
 }
 
