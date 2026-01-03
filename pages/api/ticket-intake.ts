@@ -227,6 +227,38 @@ async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
   }
 }
 
+/* ================= AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
+async function aiTranslateForDisplay(
+  text: string,
+  targetLang: "en" | "ms" | "zh" | "ta"
+): Promise<string> {
+  if (!openai || targetLang === "en") return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the text into the target language. " +
+            "Keep it short, natural, and suitable for WhatsApp display. " +
+            "Do NOT add explanations. Reply ONLY the translated text."
+        },
+        {
+          role: "user",
+          content: `Target language: ${targetLang}\nText: ${text}`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text; // fail-safe
+  }
+}
+
 /* ================= DETECT LANGUAGE ================= */
 function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   const t = text.toLowerCase();
@@ -300,9 +332,14 @@ function buildReplyText(
   }
 
 if (type === "intake_received") {
+  const issue = descriptionClean
+    ? `"${descriptionClean}"`
+    : "";
+
   switch (lang) {
     case "zh":
       return `🛠 维修工单已记录。
+我们理解您的问题是关于 ${issue}
 
 请回复：
 1️⃣ 确认工单
@@ -311,6 +348,7 @@ if (type === "intake_received") {
 
     case "ta":
       return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
+உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
 
 பதில்:
 1️⃣ டிக்கெட்டை உறுதி செய்ய
@@ -319,6 +357,7 @@ if (type === "intake_received") {
 
     case "ms":
       return `🛠 Laporan penyelenggaraan telah direkodkan.
+Kami memahami bahawa isu anda berkaitan ${issue}
 
 Sila balas:
 1️⃣ Sahkan tiket
@@ -327,6 +366,7 @@ Sila balas:
 
     default:
       return `🛠 Maintenance ticket recorded.
+We understand that your issue relates to ${issue}
 
 Please reply:
 1️⃣ Confirm ticket
@@ -626,6 +666,11 @@ export default async function handler(
 
         const description_clean = await aiCleanDescription(description_raw);
 
+    const description_display =
+  lang === "en"
+    ? description_clean
+    : await aiTranslateForDisplay(description_clean, lang);
+
        /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
@@ -758,7 +803,12 @@ export default async function handler(
       success: true,
       ticket_id: ticket.id,
       intent_category,
-      reply_text: buildReplyText(lang, "intake_received", ticket.id)
+      reply_text: buildReplyText(
+  lang,
+  "intake_received",
+  ticket.id,
+  description_display
+)
     });
   } catch (err: any) {
     console.error("🔥 ERROR:", err);
