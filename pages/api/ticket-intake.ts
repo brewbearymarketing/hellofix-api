@@ -983,6 +983,7 @@ async function handleDraftEdit(
   session: any
 ) {
   const newText = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
 
 if (!newText || newText.length < 10) {
   return res.status(200).json({
