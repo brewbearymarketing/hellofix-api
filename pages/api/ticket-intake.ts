@@ -1015,6 +1015,14 @@ if (!newText || newText.length < 10) {
   .select("description_clean")
   .eq("id", session.current_ticket_id)
   .single();
+
+  const latestClean =
+    updatedTicket?.description_clean ?? description_clean;
+
+  const description_display =
+    lang === "en"
+      ? latestClean
+      : await aiTranslateForDisplay(latestClean, lang);
   
   await supabase
     .from("conversation_sessions")
