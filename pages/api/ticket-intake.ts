@@ -628,7 +628,6 @@ if (!resident) {
     reply_text: "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan."
   });
 }
-   const unit_id = resident.unit_id;
 
 if (!resident.approved) {
   return res.status(200).json({
@@ -637,8 +636,6 @@ if (!resident.approved) {
     reply_text: "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan."
   });
 }
- const unit_id = resident.unit_id;
-
 
     /* ===== INTENT DETECTION ===== */
     let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
