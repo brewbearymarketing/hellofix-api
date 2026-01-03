@@ -1,5 +1,28 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { createClient } from "@supabase/supabase-js";
 
+/* ================= CLIENT ================= */
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+/* ================= WHATSAPP SENDER (PLACEHOLDER LATER TO ADD CODE NOW STILL FAKE SENDER) ================= */
+/*
+  Replace this with:
+  - Twilio
+  - Meta WhatsApp Cloud API
+  - 360dialog
+*/
+async function sendWhatsAppMessage(
+  phone: string,
+  message: string
+) {
+  console.log("📤 WhatsApp →", phone);
+  console.log(message);
+}
+
+/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -8,5 +31,139 @@ export default async function handler(
     return res.status(405).end();
   }
 
-  res.status(200).json({ ok: true });
+  try {
+    /* ================= PARSE WEBHOOK ================= */
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+
+    const {
+      ticket_id,
+      payment_id,
+      status,
+      amount,
+      currency
+    } = body;
+
+    if (!ticket_id || !payment_id || status !== "paid") {
+      return res.status(400).json({ error: "Invalid webhook payload" });
+    }
+
+    /* ================= LOAD TICKET ================= */
+    const { data: ticket, error: ticketError } = await supabase
+      .from("tickets")
+      .select(
+        "id, condo_id, phone_number, language, status"
+      )
+      .eq("id", ticket_id)
+      .maybeSingle();
+
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const lang = ticket.language ?? "en";
+
+    /* ================= IDEMPOTENCY CHECK (FOR PROTECTION AGAINST WEBHOOK RETRY) ================= */
+    const { data: existingPayment } = await supabase
+    .from("payments")
+    .select("id")
+    .eq("gateway_payment_id", payment_id)
+    .eq("status", "paid")
+    .maybeSingle();
+
+    if (existingPayment) {
+    return res.status(200).json({ ok: true, duplicate: true });
+    }
+
+
+    /* ================= INSERT PAYMENT ================= */
+    await supabase.from("payments").insert({
+    ticket_id: ticket.id,
+    gateway_payment_id: payment_id, // ← THIS IS THE KEY
+    amount,
+    status: "paid",
+    provider,
+    created_at: new Date()
+    });
+
+    /* ================= UPDATE TICKET ================= */
+    await supabase
+      .from("tickets")
+      .update({
+        status: "paid",
+        paid_at: new Date()
+      })
+      .eq("id", ticket.id);
+
+    /* ================= ASSIGN CONTRACTOR (SIMPLE) ================= */
+    const { data: contractor } = await supabase
+      .from("contractors")
+      .select("id")
+      .eq("condo_id", ticket.condo_id)
+      .eq("active", true)
+      .order("rating", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (contractor) {
+      await supabase
+        .from("tickets")
+        .update({ contractor_id: contractor.id })
+        .eq("id", ticket.id);
+    }
+
+    /* ================= BUILD WHATSAPP MESSAGE ================= */
+    let message = "";
+
+    switch (lang) {
+      case "ms":
+        message = `✅ Pembayaran telah disahkan.
+Kontraktor telah ditugaskan dan akan menghubungi anda.
+
+Terima kasih.`;
+        break;
+
+      case "zh":
+        message = `✅ 付款已确认。
+已分配承包商，稍后将与您联系。
+
+谢谢。`;
+        break;
+
+      case "ta":
+        message = `✅ கட்டணம் உறுதிப்படுத்தப்பட்டது.
+ஒப்பந்ததாரர் நியமிக்கப்பட்டு உங்களை தொடர்புகொள்வார்.
+
+நன்றி.`;
+        break;
+
+      default:
+        message = `✅ Payment confirmed.
+A contractor has been assigned and will contact you.
+
+Thank you.`;
+    }
+
+    /* ================= SEND WHATSAPP ================= */
+    await sendWhatsAppMessage(ticket.phone_number, message);
+
+    /* ================= RESET CONVERSATION SESSION ================= */
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "intake",
+        current_ticket_id: null,
+        updated_at: new Date()
+      })
+      .eq("condo_id", ticket.condo_id)
+      .eq("phone_number", ticket.phone_number);
+
+    return res.status(200).json({ ok: true });
+  } catch (err: any) {
+    console.error("🔥 PAYMENT WEBHOOK ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
+  }
 }
