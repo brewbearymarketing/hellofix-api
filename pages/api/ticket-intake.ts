@@ -983,8 +983,6 @@ async function handleDraftEdit(
 ) {
   const newText = req.body.description_raw?.trim();
 
-const lang = session.language ?? "en";
-
 if (!newText || newText.length < 10) {
   return res.status(200).json({
     success: true,
@@ -1010,8 +1008,6 @@ if (!newText || newText.length < 10) {
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
     .eq("id", session.id);
-
-const lang = session.language ?? "en";
 
 return res.status(200).json({
   success: true,
