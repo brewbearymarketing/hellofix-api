@@ -753,10 +753,13 @@ export default async function handler(
 
         const description_clean = await aiCleanDescription(description_raw);
 
-    const description_display =
+    const latestClean = updatedTicket?.description_clean ?? description_clean;
+
+const description_display =
   lang === "en"
-    ? description_clean
-    : await aiTranslateForDisplay(description_clean, lang);
+    ? latestClean
+    : await aiTranslateForDisplay(latestClean, lang);
+
 
        /* ===== VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
@@ -1000,12 +1003,19 @@ if (!newText || newText.length < 10) {
 }
 
   await supabase
-    .from("ticket_drafts")
-    .insert({
-      ticket_id: session.current_ticket_id,
-      description_raw: newText
-    });
+    .from("tickets")
+    .update({
+    description_raw: newText,
+    description_clean
+  })
+  .eq("id", session.current_ticket_id);
 
+  const { data: updatedTicket } = await supabase
+  .from("tickets")
+  .select("description_clean")
+  .eq("id", session.current_ticket_id)
+  .single();
+  
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
