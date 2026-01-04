@@ -50,7 +50,8 @@ async function checkThrottle(
       condo_id,
       phone_number,
       message_count: 1,
-      first_seen_at: now
+      blocked_until: null,
+      updated_at: now
     });
 
     return { allowed: true, level: "ok", count: 1 };
