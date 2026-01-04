@@ -1,26 +1,33 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
+import Stripe from "stripe";
 
-/* ================= CLIENT ================= */
+/* ================= CLIENTS ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/* ================= WHATSAPP SENDER (PLACEHOLDER LATER TO ADD CODE NOW STILL FAKE SENDER) ================= */
-/*
-  Replace this with:
-  - Twilio
-  - Meta WhatsApp Cloud API
-  - 360dialog
-*/
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2023-10-16"
+});
+
+/* ================= WHATSAPP SENDER (PLACEHOLDER) ================= */
 async function sendWhatsAppMessage(
   phone: string,
   message: string
 ) {
+  // Replace with Twilio / Meta / 360dialog later
   console.log("📤 WhatsApp →", phone);
   console.log(message);
 }
+
+/* ================= DISABLE BODY PARSER ================= */
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
 
 /* ================= API HANDLER ================= */
 export default async function handler(
@@ -31,21 +38,39 @@ export default async function handler(
     return res.status(405).end();
   }
 
+  let event: Stripe.Event;
+
   try {
-    /* ================= PARSE WEBHOOK ================= */
-    const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    /* ================= VERIFY STRIPE SIGNATURE ================= */
+    const sig = req.headers["stripe-signature"] as string;
 
-    const {
-      ticket_id,
-      payment_id,
-      status,
-      amount,
-      currency
-    } = body;
+    const buf = await getRawBody(req);
 
-    if (!ticket_id || !payment_id || status !== "paid") {
-      return res.status(400).json({ error: "Invalid webhook payload" });
+    event = stripe.webhooks.constructEvent(
+      buf,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET!
+    );
+  } catch (err: any) {
+    console.error("❌ Stripe signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  /* ================= ONLY HANDLE SUCCESS ================= */
+  if (event.type !== "payment_intent.succeeded") {
+    return res.status(200).json({ ignored: true });
+  }
+
+  try {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+
+    const gateway_payment_id = paymentIntent.id;
+    const amount = paymentIntent.amount_received / 100;
+    const currency = paymentIntent.currency.toUpperCase();
+    const ticket_id = paymentIntent.metadata.ticket_id;
+
+    if (!ticket_id) {
+      throw new Error("Missing ticket_id in Stripe metadata");
     }
 
     /* ================= LOAD TICKET ================= */
@@ -58,47 +83,39 @@ export default async function handler(
       .maybeSingle();
 
     if (ticketError || !ticket) {
-      return res.status(404).json({ error: "Ticket not found" });
+      throw new Error("Ticket not found");
     }
 
     const lang = ticket.language ?? "en";
 
-    /* ================= IDEMPOTENCY CHECK (FOR PROTECTION AGAINST WEBHOOK RETRY) ================= */
-const refno = body.refno;
-const ticketId = body.order_id;
+    /* ================= IDEMPOTENCY GUARD ================= */
+    const { data: existingPayment } = await supabase
+      .from("payments")
+      .select("id")
+      .eq("gateway_payment_id", gateway_payment_id)
+      .eq("status", "paid")
+      .maybeSingle();
 
-const { data: existingPayment } = await supabase
-  .from("payments")
-  .select("id")
-  .eq("gateway_payment_id", refno)
-  .eq("status", "paid")
-  .maybeSingle();
-
-if (existingPayment) {
-  return res.status(200).json({ ok: true, duplicate: true });
-}
+    if (existingPayment) {
+      return res.status(200).json({ ok: true, duplicate: true });
+    }
 
     /* ================= INSERT PAYMENT ================= */
-await supabase.from("payments").insert({
-  ticket_id: ticketId,
-  gateway_payment_id: refno,
-  amount: Number(body.amount),
-  status: "paid",
-  provider: "toyyibpay",
-  payment_type: "diagnosis_fee",
-  created_at: new Date()
-});
-
-if (body.status_id !== "1") {
-  return res.status(200).json({ ignored: true });
-}
+    await supabase.from("payments").insert({
+      ticket_id: ticket.id,
+      gateway_payment_id,
+      amount,
+      status: "paid",
+      provider: "stripe",
+      payment_type: "diagnosis"
+    });
 
     /* ================= UPDATE TICKET ================= */
     await supabase
       .from("tickets")
       .update({
         status: "paid",
-        paid_at: new Date()
+        updated_at: new Date()
       })
       .eq("id", ticket.id);
 
@@ -119,39 +136,38 @@ if (body.status_id !== "1") {
         .eq("id", ticket.id);
     }
 
-    /* ================= BUILD WHATSAPP MESSAGE ================= */
+    /* ================= WHATSAPP MESSAGE ================= */
     let message = "";
 
     switch (lang) {
       case "ms":
-        message = `✅ Pembayaran telah disahkan.
-Kontraktor telah ditugaskan dan akan menghubungi anda.
-
-Terima kasih.`;
+        message =
+          "✅ Pembayaran telah disahkan.\n" +
+          "Kontraktor sedang ditugaskan dan akan menghubungi anda.\n\n" +
+          "Terima kasih.";
         break;
 
       case "zh":
-        message = `✅ 付款已确认。
-已分配承包商，稍后将与您联系。
-
-谢谢。`;
+        message =
+          "✅ 付款已确认。\n" +
+          "已分配承包商，稍后将与您联系。\n\n" +
+          "谢谢。";
         break;
 
       case "ta":
-        message = `✅ கட்டணம் உறுதிப்படுத்தப்பட்டது.
-ஒப்பந்ததாரர் நியமிக்கப்பட்டு உங்களை தொடர்புகொள்வார்.
-
-நன்றி.`;
+        message =
+          "✅ கட்டணம் உறுதிப்படுத்தப்பட்டது.\n" +
+          "ஒப்பந்ததாரர் நியமிக்கப்பட்டு உங்களை தொடர்புகொள்வார்.\n\n" +
+          "நன்றி.";
         break;
 
       default:
-        message = `✅ Payment confirmed.
-A contractor has been assigned and will contact you.
-
-Thank you.`;
+        message =
+          "✅ Payment confirmed.\n" +
+          "A contractor is being assigned and will contact you.\n\n" +
+          "Thank you.";
     }
 
-    /* ================= SEND WHATSAPP ================= */
     await sendWhatsAppMessage(ticket.phone_number, message);
 
     /* ================= RESET CONVERSATION SESSION ================= */
@@ -167,10 +183,17 @@ Thank you.`;
 
     return res.status(200).json({ ok: true });
   } catch (err: any) {
-    console.error("🔥 PAYMENT WEBHOOK ERROR:", err);
+    console.error("🔥 STRIPE WEBHOOK ERROR:", err);
     return res.status(500).json({
-      error: "Internal Server Error",
+      error: "Webhook handler failed",
       detail: err.message
     });
   }
+}
+
+/* ================= RAW BODY HELPER ================= */
+import { buffer } from "micro";
+
+async function getRawBody(req: NextApiRequest): Promise<Buffer> {
+  return buffer(req);
 }
