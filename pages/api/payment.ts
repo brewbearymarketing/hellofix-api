@@ -87,7 +87,7 @@ if (!ticket_id || !gateway_payment_id) {
     const { data: existing } = await supabase
       .from("payments")
       .select("id")
-      .eq("gateway_payment_id", paymentIntentId)
+      .eq("gateway_payment_id", gateway_payment_id)
       .maybeSingle();
 
     if (existing) {
