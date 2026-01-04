@@ -978,7 +978,7 @@ async function handleConfirmation(
       .eq("id", session.id);
 
     const paymentUrl =
-  `https://hellofix.app/api/pay?ticket_id=${ticketId}`;
+  `https://hellofix-api.vercel.app/api/pay?ticket_id=${ticketId}`;
 
     return res.status(200).json({
     success: true,
