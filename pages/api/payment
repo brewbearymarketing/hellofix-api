@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import { buffer } from "micro";
 
 /* ================= CLIENTS ================= */
 const supabase = createClient(
@@ -12,33 +13,18 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2023-10-16"
 });
 
-const paymentIntent = await stripe.paymentIntents.create({
-  amount: 3000, // RM30 = 3000 sen
-  currency: "myr",
-  automatic_payment_methods: { enabled: true },
-
-  metadata: {
-    ticket_id:
-  }
-});
-
-
-/* ================= WHATSAPP SENDER (PLACEHOLDER) ================= */
-async function sendWhatsAppMessage(
-  phone: string,
-  message: string
-) {
-  // Replace with Twilio / Meta / 360dialog later
-  console.log("📤 WhatsApp →", phone);
-  console.log(message);
-}
-
 /* ================= DISABLE BODY PARSER ================= */
 export const config = {
   api: {
     bodyParser: false
   }
 };
+
+/* ================= WHATSAPP SENDER (PLACEHOLDER) ================= */
+async function sendWhatsAppMessage(phone: string, message: string) {
+  console.log("📤 WhatsApp →", phone);
+  console.log(message);
+}
 
 /* ================= API HANDLER ================= */
 export default async function handler(
@@ -49,19 +35,11 @@ export default async function handler(
     return res.status(405).end();
   }
 
-  const { ticket_id } = req.body;
-
-  if (!ticket_id) {
-    return res.status(400).json({ error: "Missing ticket_id" });
-  }
-
   let event: Stripe.Event;
 
   try {
-    /* ================= VERIFY STRIPE SIGNATURE ================= */
     const sig = req.headers["stripe-signature"] as string;
-
-    const buf = await getRawBody(req);
+    const buf = await buffer(req);
 
     event = stripe.webhooks.constructEvent(
       buf,
@@ -73,71 +51,43 @@ export default async function handler(
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  /* ================= ONLY HANDLE SUCCESS ================= */
-let gateway_payment_id: string;
-let ticket_id: string;
-let amount: number;
+  /* ================= ONLY HANDLE SUCCESS EVENTS ================= */
+  let gateway_payment_id: string | null = null;
+  let ticket_id: string | null = null;
+  let amount = 0;
 
-if (event.type === "checkout.session.completed") {
-  const session = event.data.object as Stripe.Checkout.Session;
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
 
-  gateway_payment_id = session.payment_intent as string;
-  ticket_id = session.metadata?.ticket_id!;
-  amount = (session.amount_total ?? 0) / 100;
+    gateway_payment_id = session.payment_intent as string;
+    ticket_id = session.metadata?.ticket_id ?? null;
+    amount = (session.amount_total ?? 0) / 100;
+  } else if (event.type === "payment_intent.succeeded") {
+    const pi = event.data.object as Stripe.PaymentIntent;
 
-} else if (event.type === "payment_intent.succeeded") {
-  const pi = event.data.object as Stripe.PaymentIntent;
+    gateway_payment_id = pi.id;
+    ticket_id = pi.metadata?.ticket_id ?? null;
+    amount = (pi.amount_received ?? 0) / 100;
+  } else {
+    return res.status(200).json({ ignored: true });
+  }
 
-  gateway_payment_id = pi.id;
-  ticket_id = pi.metadata?.ticket_id!;
-  amount = (pi.amount_received ?? 0) / 100;
+  if (!gateway_payment_id || !ticket_id) {
+    console.error("❌ Missing ticket_id or payment id");
+    return res.status(400).json({ error: "Missing metadata" });
+  }
 
-} else {
-  return res.status(200).json({ ignored: true });
-}
-
-if (!ticket_id || !gateway_payment_id) {
-  throw new Error("Missing ticket_id or payment ID");
-}
-
-  /* ================= CHECKOUT SESSION ================= */
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    payment_method_types: ["card", "link"],
-    line_items: [
-      {
-        price_data: {
-          currency: "myr",
-          unit_amount: 3000,
-          product_data: { name: "Diagnosis Fee" }
-        },
-        quantity: 1
-      }
-    ],
-    metadata: {
-      ticket_id
-    },
-    success_url: `https://hellofix.app/payment-success?ticket_id=${ticket_id}`,
-    cancel_url: `https://hellofix.app/payment-cancel?ticket_id=${ticket_id}`
-  });
-
-  return res.status(200).json({ url: session.url });
-}
-
+  try {
     /* ================= LOAD TICKET ================= */
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select(
-        "id, condo_id, phone_number, language, status"
-      )
+      .select("id, condo_id, phone_number, language, status")
       .eq("id", ticket_id)
       .maybeSingle();
 
     if (ticketError || !ticket) {
       throw new Error("Ticket not found");
     }
-
-    const lang = ticket.language ?? "en";
 
     /* ================= IDEMPOTENCY GUARD ================= */
     const { data: existingPayment } = await supabase
@@ -187,14 +137,15 @@ if (!ticket_id || !gateway_payment_id) {
         .eq("id", ticket.id);
     }
 
-    /* ================= WHATSAPP MESSAGE ================= */
+    /* ================= WHATSAPP CONFIRMATION ================= */
+    const lang = ticket.language ?? "en";
     let message = "";
 
     switch (lang) {
       case "ms":
         message =
           "✅ Pembayaran telah disahkan.\n" +
-          "Kontraktor sedang ditugaskan dan akan menghubungi anda.\n\n" +
+          "Kontraktor akan ditugaskan dan akan menghubungi anda.\n\n" +
           "Terima kasih.";
         break;
 
@@ -221,7 +172,7 @@ if (!ticket_id || !gateway_payment_id) {
 
     await sendWhatsAppMessage(ticket.phone_number, message);
 
-    /* ================= RESET CONVERSATION SESSION ================= */
+    /* ================= RESET CONVERSATION ================= */
     await supabase
       .from("conversation_sessions")
       .update({
@@ -240,11 +191,4 @@ if (!ticket_id || !gateway_payment_id) {
       detail: err.message
     });
   }
-}
-
-/* ================= RAW BODY HELPER ================= */
-import { buffer } from "micro";
-
-async function getRawBody(req: NextApiRequest): Promise<Buffer> {
-  return buffer(req);
 }
