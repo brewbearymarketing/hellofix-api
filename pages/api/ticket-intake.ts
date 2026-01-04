@@ -765,6 +765,7 @@ if (throttle.count === 2) {
 }
 
 // Third+ greeting → firm but polite
+if (throttle.count === 3) {
 return res.status(200).json({
   success: true,
   ignored: true,
