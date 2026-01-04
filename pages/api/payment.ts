@@ -108,7 +108,7 @@ if (!ticket_id || !gateway_payment_id) {
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
       ticket_id: ticket.id,
-      gateway_payment_id: paymentIntentId,
+      gateway_payment_id: gateway_payment_id,
       amount,
       currency: "MYR",
       status: "paid",
