@@ -704,7 +704,7 @@ export default async function handler(
         return res.status(200).json({
           success: true,
           ignored: true,
-          reply_text: buildThrottleNotice(tempLang)
+          reply_text: buildReplyText(tempLang, "greeting")
         });
       }
     }
@@ -722,15 +722,6 @@ export default async function handler(
       success: true,
       ignored: true,
       reply_text: buildReplyText(tempLang, "greeting")
-    });
-  }
-
-  // Second message → explicit throttle warning
-  if (throttle.count === 2) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildThrottleNotice(tempLang)
     });
   }
 
