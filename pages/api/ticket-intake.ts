@@ -316,7 +316,12 @@ async function aiDetectLanguage(
 /* ================= BANK GRADE REPLY GENERATOR ================= */
 function buildReplyText(
   lang: "en" | "ms" | "zh" | "ta",
-  type: "greeting" | "intake_received" | "confirmed",
+  type:
+  | "greeting"
+  | "greeting_soft"
+  | "greeting_firm"
+  | "intake_received"
+  | "confirmed",
   ticketId?: string,
   descriptionDisplay?: string
 ): string {
@@ -332,6 +337,32 @@ function buildReplyText(
         return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
     }
   }
+
+if (type === "greeting_soft") {
+  switch (lang) {
+    case "ms":
+      return "Sekadar peringatan kecil 🙂\nSila terangkan masalah penyelenggaraan supaya kami boleh buka tiket untuk anda.";
+    case "zh":
+      return "小提醒一下 🙂\n请描述维修问题，以便我们为您创建工单。";
+    case "ta":
+      return "ஒரு சிறிய நினைவூட்டல் 🙂\nடிக்கெட் உருவாக்க, தயவுசெய்து பராமரிப்பு பிரச்சனையை விவரிக்கவும்.";
+    default:
+      return "Just a quick reminder 🙂\nPlease describe the maintenance issue so we can create a ticket for you.";
+  }
+}
+
+if (type === "greeting_firm") {
+  switch (lang) {
+    case "ms":
+      return "Untuk meneruskan, kami perlukan penerangan ringkas mengenai masalah penyelenggaraan.\nSelepas itu, kami akan uruskan selebihnya.";
+    case "zh":
+      return "要继续处理，我们需要您简要说明维修问题。\n收到后，我们将为您安排后续。";
+    case "ta":
+      return "தொடர, தயவுசெய்து பராமரிப்பு பிரச்சனையை சுருக்கமாக விளக்கவும்.\nமீதியைக் kami uruskan.";
+    default:
+      return "To proceed, we’ll need a brief description of the maintenance issue.\nOnce received, we’ll take care of the rest.";
+  }
+}
 
 if (type === "intake_received") {
   const issue = descriptionDisplay
@@ -377,7 +408,6 @@ Please reply:
   }
 }
 
-  
   // confirmed
   switch (lang) {
     case "zh":
@@ -725,12 +755,23 @@ export default async function handler(
     });
   }
 
-  // After that → silent
+  // Second greeting → soft nudge
+if (throttle.count === 2) {
   return res.status(200).json({
     success: true,
-    ignored: true
+    ignored: true,
+    reply_text: buildReplyText(tempLang, "greeting_soft")
   });
 }
+
+// Third+ greeting → firm but polite
+return res.status(200).json({
+  success: true,
+  ignored: true,
+  reply_text: buildReplyText(tempLang, "greeting_firm")
+});
+}
+    
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
