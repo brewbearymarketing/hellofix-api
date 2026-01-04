@@ -772,6 +772,7 @@ return res.status(200).json({
   reply_text: buildReplyText(tempLang, "greeting_firm")
 });
 }
+}
     
        /* ===== MEANINGFUL INTENT CHECK ===== */
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
