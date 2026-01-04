@@ -16,6 +16,7 @@
     "react-dom": "19.2.1",
     "stripe": "^14.0.0"
   },
+
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
