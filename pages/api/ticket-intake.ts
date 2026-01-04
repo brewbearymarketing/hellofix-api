@@ -1111,7 +1111,7 @@ async function handlePayment(
     await supabase
       .from("conversation_sessions")
       .update({
-        state: "closed",
+        state: "intake",
         current_ticket_id: null
       })
       .eq("id", session.id);
