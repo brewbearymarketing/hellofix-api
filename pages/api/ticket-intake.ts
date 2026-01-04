@@ -951,12 +951,12 @@ async function handleConfirmation(
     buildFollowUpReply(lang, "confirm_success") +
     "\n\n" +
     (lang === "ms"
-      ? `💳 Pembayaran diperlukan\nSila buat pembayaran melalui pautan berikut:\n${"https://buy.stripe.com/test_aFa7sLeplca4aYa13i9MY00"}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
+      ? `💳 Pembayaran diperlukan\nSila buat pembayaran melalui pautan berikut:\n${paymentUrl}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
       : lang === "zh"
-      ? `💳 需要付款\n请通过以下链接完成付款：\n${"https://buy.stripe.com/test_aFa7sLeplca4aYa13i9MY00"}\n\n付款确认后：\n• 将分配承包商\n• 您将收到 WhatsApp 通知`
+      ? `💳 需要付款\n请通过以下链接完成付款：\n${paymentUrl}\n\n付款确认后：\n• 将分配承包商\n• 您将收到 WhatsApp 通知`
       : lang === "ta"
-      ? `💳 கட்டணம் தேவை\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${"https://buy.stripe.com/test_aFa7sLeplca4aYa13i9MY00"}\n\nபணம் உறுதி செய்யப்பட்ட பின்:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
-      : `💳 Payment required\nPlease complete payment via the link below:\n${"https://buy.stripe.com/test_aFa7sLeplca4aYa13i9MY00"}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
+      ? `💳 கட்டணம் தேவை\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பின்:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
+      : `💳 Payment required\nPlease complete payment via the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
 });
   }
 
