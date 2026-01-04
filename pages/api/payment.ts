@@ -54,34 +54,33 @@ export default async function handler(
   }
 
   /* ================= HANDLE SUCCESS EVENTS ================= */
-  let paymentIntentId: string | null = null;
-  let ticket_id: string | null = null;
-  let amount = 0;
+  let gateway_payment_id: string;
+let ticket_id: string;
+let amount: number;
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
+if (event.type === "checkout.session.completed") {
+  const session = event.data.object as Stripe.Checkout.Session;
 
-    paymentIntentId = session.payment_intent as string;
-    ticket_id = session.metadata?.ticket_id ?? null;
-    amount = (session.amount_total ?? 0) / 100;
-  }
+  gateway_payment_id = session.payment_intent as string;
+  ticket_id = session.metadata?.ticket_id!;
+  amount = (session.amount_total ?? 0) / 100;
+}
+else if (event.type === "payment_intent.succeeded") {
+  const pi = event.data.object as Stripe.PaymentIntent;
 
-  else if (event.type === "payment_intent.succeeded") {
-    const pi = event.data.object as Stripe.PaymentIntent;
+  gateway_payment_id = pi.id;
+  ticket_id = pi.metadata.ticket_id!;
+  amount = (pi.amount_received ?? 0) / 100;
+}
+else {
+  return res.status(200).json({ ignored: true });
+}
 
-    paymentIntentId = pi.id;
-    ticket_id = pi.metadata?.ticket_id ?? null;
-    amount = (pi.amount_received ?? 0) / 100;
-  }
+if (!ticket_id || !gateway_payment_id) {
+  console.error("❌ Missing payment identifiers");
+  return res.status(200).json({ ignored: true });
+}
 
-  else {
-    return res.status(200).json({ ignored: true });
-  }
-
-  if (!paymentIntentId || !ticket_id) {
-    console.warn("⚠️ Missing paymentIntentId or ticket_id");
-    return res.status(200).json({ ignored: true });
-  }
 
   try {
     /* ================= IDEMPOTENCY CHECK ================= */
