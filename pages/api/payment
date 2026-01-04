@@ -12,12 +12,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2023-10-16"
 });
 
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2023-10-16"
-});
-
 const paymentIntent = await stripe.paymentIntents.create({
   amount: 3000, // RM30 = 3000 sen
   currency: "myr",
@@ -74,41 +68,31 @@ export default async function handler(
   }
 
   /* ================= ONLY HANDLE SUCCESS ================= */
-let paymentIntentId: string | null = null;
-let ticket_id: string | null = null;
-let amount = 0;
+let gateway_payment_id: string;
+let ticket_id: string;
+let amount: number;
 
 if (event.type === "checkout.session.completed") {
   const session = event.data.object as Stripe.Checkout.Session;
 
-  paymentIntentId = session.payment_intent as string;
-  ticket_id = session.metadata?.ticket_id ?? null;
+  gateway_payment_id = session.payment_intent as string;
+  ticket_id = session.metadata?.ticket_id!;
   amount = (session.amount_total ?? 0) / 100;
-}
 
-else if (event.type === "payment_intent.succeeded") {
+} else if (event.type === "payment_intent.succeeded") {
   const pi = event.data.object as Stripe.PaymentIntent;
 
-  paymentIntentId = pi.id;
-  ticket_id = pi.metadata?.ticket_id ?? null;
+  gateway_payment_id = pi.id;
+  ticket_id = pi.metadata?.ticket_id!;
   amount = (pi.amount_received ?? 0) / 100;
-}
 
-else {
+} else {
   return res.status(200).json({ ignored: true });
 }
 
-  try {
-    const paymentIntent = event.data.object as Stripe.PaymentIntent;
-
-    const gateway_payment_id = paymentIntent.id;
-    const amount = paymentIntent.amount_received / 100;
-    const currency = paymentIntent.currency.toUpperCase();
-    const ticket_id = paymentIntent.metadata.ticket_id;
-
-    if (!ticket_id) {
-      throw new Error("Missing ticket_id in Stripe metadata");
-    }
+if (!ticket_id || !gateway_payment_id) {
+  throw new Error("Missing ticket_id or payment ID");
+}
 
     /* ================= LOAD TICKET ================= */
     const { data: ticket, error: ticketError } = await supabase
@@ -140,7 +124,7 @@ else {
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
       ticket_id: ticket.id,
-      gateway_payment_id: paymentIntentId,
+      gateway_payment_id,
       amount,
       status: "paid",
       provider: "stripe",
@@ -155,27 +139,6 @@ else {
         updated_at: new Date()
       })
       .eq("id", ticket.id);
-
-/* ================= CHECKOUT SESSION ================= */
-const session = await stripe.checkout.sessions.create({
-  mode: "payment",
-  line_items: [
-    {
-      price_data: {
-        currency: "myr",
-        unit_amount: 3000,
-        product_data: { name: "Diagnosis Fee" }
-      },
-      quantity: 1
-    }
-  ],
-  success_url: "https://hellofix.app/success",
-  cancel_url: "https://hellofix.app/cancel",
-
-  metadata: {
-    ticket_id:
-  }
-});
 
     /* ================= ASSIGN CONTRACTOR (SIMPLE) ================= */
     const { data: contractor } = await supabase
