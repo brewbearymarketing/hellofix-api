@@ -703,13 +703,16 @@ export default async function handler(
         return res.status(200).json({
           success: true,
           ignored: true,
-          reply_text: buildReplyText(tempLang, "greeting")
+          reply_text: buildThrottleNotice(tempLang)
         });
       }
     }
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
-    if (isGreetingOnly(description_raw)) {
+   if (
+  conversationState === "intake" &&
+  isGreetingOnly(description_raw)
+) {
   const tempLang = lang ?? detectLanguage(description_raw);
 
   // First message only → greeting
