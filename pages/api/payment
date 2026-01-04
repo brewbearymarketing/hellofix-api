@@ -49,6 +49,12 @@ export default async function handler(
     return res.status(405).end();
   }
 
+  const { ticket_id } = req.body;
+
+  if (!ticket_id) {
+    return res.status(400).json({ error: "Missing ticket_id" });
+  }
+
   let event: Stripe.Event;
 
   try {
@@ -92,6 +98,30 @@ if (event.type === "checkout.session.completed") {
 
 if (!ticket_id || !gateway_payment_id) {
   throw new Error("Missing ticket_id or payment ID");
+}
+
+  /* ================= CHECKOUT SESSION ================= */
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    payment_method_types: ["card", "link"],
+    line_items: [
+      {
+        price_data: {
+          currency: "myr",
+          unit_amount: 3000,
+          product_data: { name: "Diagnosis Fee" }
+        },
+        quantity: 1
+      }
+    ],
+    metadata: {
+      ticket_id
+    },
+    success_url: `https://hellofix.app/payment-success?ticket_id=${ticket_id}`,
+    cancel_url: `https://hellofix.app/payment-cancel?ticket_id=${ticket_id}`
+  });
+
+  return res.status(200).json({ url: session.url });
 }
 
     /* ================= LOAD TICKET ================= */
