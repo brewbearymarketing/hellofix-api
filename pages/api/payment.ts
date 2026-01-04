@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
-import { buffer } from "micro";
 
 /* ================= CLIENTS ================= */
 const supabase = createClient(
