@@ -13,7 +13,7 @@
     "next": "16.0.10",
     "openai": "^6.13.0",
     "react": "19.2.1",
-    "react-dom": "19.2.1"
+    "react-dom": "19.2.1",
     "stripe": "^14.0.0"
   },
   "devDependencies": {
