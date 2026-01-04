@@ -741,7 +741,7 @@ export default async function handler(
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
-  !session?.current_ticket_id &&
+  conversationState === "intake" &&
   isGreetingOnly(description_raw)
 ) {
   const tempLang = lang ?? detectLanguage(description_raw);
