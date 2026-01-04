@@ -1,6 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
+
+/* ================= CONFIG ================= */
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
 
 /* ================= CLIENTS ================= */
 const supabase = createClient(
@@ -12,17 +19,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2023-10-16"
 });
 
-/* ================= DISABLE BODY PARSER ================= */
-export const config = {
-  api: {
-    bodyParser: false
+/* ================= RAW BODY (NO MICRO) ================= */
+async function readRawBody(req: NextApiRequest): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-};
-
-/* ================= WHATSAPP SENDER (PLACEHOLDER) ================= */
-async function sendWhatsAppMessage(phone: string, message: string) {
-  console.log("📤 WhatsApp →", phone);
-  console.log(message);
+  return Buffer.concat(chunks);
 }
 
 /* ================= API HANDLER ================= */
@@ -31,79 +34,84 @@ export default async function handler(
   res: NextApiResponse
 ) {
   if (req.method !== "POST") {
-    return res.status(405).end();
+    return res.status(405).end("Method Not Allowed");
   }
 
   let event: Stripe.Event;
 
   try {
     const sig = req.headers["stripe-signature"] as string;
+    const rawBody = await readRawBody(req);
 
     event = stripe.webhooks.constructEvent(
-      buf,
+      rawBody,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET!
     );
   } catch (err: any) {
-    console.error("❌ Stripe signature error:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error("❌ Stripe signature verification failed:", err.message);
+    return res.status(400).send("Webhook Error");
   }
 
-  /* ================= ONLY HANDLE SUCCESS EVENTS ================= */
-  let gateway_payment_id: string | null = null;
+  /* ================= HANDLE SUCCESS EVENTS ================= */
+  let paymentIntentId: string | null = null;
   let ticket_id: string | null = null;
   let amount = 0;
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
 
-    gateway_payment_id = session.payment_intent as string;
+    paymentIntentId = session.payment_intent as string;
     ticket_id = session.metadata?.ticket_id ?? null;
     amount = (session.amount_total ?? 0) / 100;
-  } else if (event.type === "payment_intent.succeeded") {
+  }
+
+  else if (event.type === "payment_intent.succeeded") {
     const pi = event.data.object as Stripe.PaymentIntent;
 
-    gateway_payment_id = pi.id;
+    paymentIntentId = pi.id;
     ticket_id = pi.metadata?.ticket_id ?? null;
     amount = (pi.amount_received ?? 0) / 100;
-  } else {
+  }
+
+  else {
     return res.status(200).json({ ignored: true });
   }
 
-  if (!gateway_payment_id || !ticket_id) {
-    console.error("❌ Missing ticket_id or payment id");
-    return res.status(400).json({ error: "Missing metadata" });
+  if (!paymentIntentId || !ticket_id) {
+    console.warn("⚠️ Missing paymentIntentId or ticket_id");
+    return res.status(200).json({ ignored: true });
   }
 
   try {
+    /* ================= IDEMPOTENCY CHECK ================= */
+    const { data: existing } = await supabase
+      .from("payments")
+      .select("id")
+      .eq("gateway_payment_id", paymentIntentId)
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(200).json({ ok: true, duplicate: true });
+    }
+
     /* ================= LOAD TICKET ================= */
-    const { data: ticket, error: ticketError } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
-      .select("id, condo_id, phone_number, language, status")
+      .select("id, condo_id, phone_number, language")
       .eq("id", ticket_id)
       .maybeSingle();
 
-    if (ticketError || !ticket) {
+    if (!ticket) {
       throw new Error("Ticket not found");
-    }
-
-    /* ================= IDEMPOTENCY GUARD ================= */
-    const { data: existingPayment } = await supabase
-      .from("payments")
-      .select("id")
-      .eq("gateway_payment_id", gateway_payment_id)
-      .eq("status", "paid")
-      .maybeSingle();
-
-    if (existingPayment) {
-      return res.status(200).json({ ok: true, duplicate: true });
     }
 
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
       ticket_id: ticket.id,
-      gateway_payment_id,
+      gateway_payment_id: paymentIntentId,
       amount,
+      currency: "MYR",
       status: "paid",
       provider: "stripe",
       payment_type: "diagnosis"
@@ -118,58 +126,6 @@ export default async function handler(
       })
       .eq("id", ticket.id);
 
-    /* ================= ASSIGN CONTRACTOR (SIMPLE) ================= */
-    const { data: contractor } = await supabase
-      .from("contractors")
-      .select("id")
-      .eq("condo_id", ticket.condo_id)
-      .eq("active", true)
-      .order("rating", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (contractor) {
-      await supabase
-        .from("tickets")
-        .update({ contractor_id: contractor.id })
-        .eq("id", ticket.id);
-    }
-
-    /* ================= WHATSAPP CONFIRMATION ================= */
-    const lang = ticket.language ?? "en";
-    let message = "";
-
-    switch (lang) {
-      case "ms":
-        message =
-          "✅ Pembayaran telah disahkan.\n" +
-          "Kontraktor akan ditugaskan dan akan menghubungi anda.\n\n" +
-          "Terima kasih.";
-        break;
-
-      case "zh":
-        message =
-          "✅ 付款已确认。\n" +
-          "已分配承包商，稍后将与您联系。\n\n" +
-          "谢谢。";
-        break;
-
-      case "ta":
-        message =
-          "✅ கட்டணம் உறுதிப்படுத்தப்பட்டது.\n" +
-          "ஒப்பந்ததாரர் நியமிக்கப்பட்டு உங்களை தொடர்புகொள்வார்.\n\n" +
-          "நன்றி.";
-        break;
-
-      default:
-        message =
-          "✅ Payment confirmed.\n" +
-          "A contractor is being assigned and will contact you.\n\n" +
-          "Thank you.";
-    }
-
-    await sendWhatsAppMessage(ticket.phone_number, message);
-
     /* ================= RESET CONVERSATION ================= */
     await supabase
       .from("conversation_sessions")
@@ -183,9 +139,9 @@ export default async function handler(
 
     return res.status(200).json({ ok: true });
   } catch (err: any) {
-    console.error("🔥 STRIPE WEBHOOK ERROR:", err);
+    console.error("🔥 PAYMENT WEBHOOK ERROR:", err);
     return res.status(500).json({
-      error: "Webhook handler failed",
+      error: "Payment processing failed",
       detail: err.message
     });
   }
