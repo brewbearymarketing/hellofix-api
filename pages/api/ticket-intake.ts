@@ -590,6 +590,41 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
+/*=============== HELPER ========================*/
+function formatIntentLabel(
+  intent: "unit" | "common_area" | "mixed" | "uncertain",
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map = {
+    en: {
+      unit: "Unit",
+      common_area: "Common area",
+      mixed: "Unit & common area",
+      uncertain: "Uncertain"
+    },
+    ms: {
+      unit: "Unit kediaman",
+      common_area: "Kawasan bersama",
+      mixed: "Unit & kawasan bersama",
+      uncertain: "Tidak pasti"
+    },
+    zh: {
+      unit: "单位",
+      common_area: "公共区域",
+      mixed: "单位与公共区域",
+      uncertain: "不确定"
+    },
+    ta: {
+      unit: "தனிப்பட்ட யூனிட்",
+      common_area: "பொது பகுதி",
+      mixed: "யூனிட் மற்றும் பொது பகுதி",
+      uncertain: "தெளிவில்லை"
+    }
+  };
+
+  return map[lang][intent];
+}
+
 /* ================= MALAYSIAN AI NORMALISER ================= */
 async function aiCleanDescription(text: string): Promise<string> {
   if (!openai) return text;
@@ -998,41 +1033,6 @@ const description_display =
   }
 }
 
-/*=============== HELPER ========================*/
-function formatIntentLabel(
-  intent: "unit" | "common_area" | "mixed" | "uncertain",
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const map = {
-    en: {
-      unit: "Unit",
-      common_area: "Common area",
-      mixed: "Unit & common area",
-      uncertain: "Uncertain"
-    },
-    ms: {
-      unit: "Unit kediaman",
-      common_area: "Kawasan bersama",
-      mixed: "Unit & kawasan bersama",
-      uncertain: "Tidak pasti"
-    },
-    zh: {
-      unit: "单位",
-      common_area: "公共区域",
-      mixed: "单位与公共区域",
-      uncertain: "不确定"
-    },
-    ta: {
-      unit: "தனிப்பட்ட யூனிட்",
-      common_area: "பொது பகுதி",
-      mixed: "யூனிட் மற்றும் பொது பகுதி",
-      uncertain: "தெளிவில்லை"
-    }
-  };
-
-  return map[lang][intent];
-}
-
 /* =====================================================
    FOLLOW-UP HANDLERS (NO AI / NO THROTTLE)
 ===================================================== */
@@ -1205,6 +1205,8 @@ if (commonHit && unitHit) {
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
     .eq("id", session.id);
+
+const intentLabel = formatIntentLabel(intent_category, lang);
 
 return res.status(200).json({
   success: true,
