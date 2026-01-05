@@ -1217,7 +1217,7 @@ return res.status(200).json({
 Kami memahami isu anda berkaitan:
 "${description_display}"
 
-Kategori: ${intentLabel}
+"Kategori: ${intentLabel}"
 
 Sila balas:
 1️⃣ Sahkan tiket
@@ -1229,7 +1229,7 @@ Sila balas:
 我们理解您的问题是关于：
 "${description_display}"
 
-类别：${intentLabel}
+"类别：${intentLabel}"
 
 请回复：
 1️⃣ 确认工单
@@ -1241,7 +1241,7 @@ Sila balas:
 உங்கள் பிரச்சனை தொடர்புடையது:
 "${description_display}"
 
-வகை: ${intentLabel}
+"வகை: ${intentLabel}"
 
 பதில்:
 1️⃣ டிக்கெட்டை உறுதி செய்ய
@@ -1252,7 +1252,7 @@ Sila balas:
 We understand your issue relates to:
 "${description_display}"
 
-Category: ${intentLabel}
+"Category: ${intentLabel}"
 
 Please reply:
 1️⃣ Confirm ticket
