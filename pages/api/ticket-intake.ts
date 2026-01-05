@@ -771,15 +771,15 @@ export default async function handler(
 
   /* ================= FINAL MENU STATE LOCK ================= */
 const menuText = description_raw.trim();
-const isMenuReply = ["1", "2", "3"].includes(menuText);
+const isMenuSelection = ["1", "2", "3"].includes(menuText);
 
 let conversationState =
   session?.state ?? "intake";
 
-/* 🔒 If menu reply + ticket exists → FORCE confirmation */
-if (isMenuReply && session?.current_ticket_id) {
+if (isMenuSelection && session?.current_ticket_id) {
   conversationState = "awaiting_confirmation";
 }
+
 
 
     /* ================= HARD GUARD: MENU REPLIES ================= */
