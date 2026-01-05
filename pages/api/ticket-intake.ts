@@ -775,6 +775,7 @@ return res.status(200).json({
 }
     
        /* ===== MEANINGFUL INTENT CHECK ===== */
+if (conversationState === "intake") {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
@@ -784,6 +785,7 @@ return res.status(200).json({
       ignored: true,
       reply_text: buildReplyText(tempLang, "greeting")
     });
+  }
   }
 
     /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
@@ -1049,6 +1051,23 @@ if (!newText || newText.length < 10) {
         : "Please provide a clearer description of the issue."
   });
 }
+
+  /* ================= RE-RUN MEANINGFUL INTENT (EDIT ONLY) ================= */
+  const hasMeaningfulIntent = await aiIsMeaningfulIssue(newText);
+
+  if (!hasMeaningfulIntent) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Penerangan ini masih belum jelas sebagai isu penyelenggaraan. Sila nyatakan masalah sebenar (contoh: paip bocor, lif rosak)."
+          : lang === "zh"
+          ? "该描述尚未清楚说明维修问题。请重新描述实际的维护问题。"
+          : lang === "ta"
+          ? "இந்த விளக்கம் பராமரிப்பு பிரச்சனையாக தெளிவாக இல்லை. தயவுசெய்து பிரச்சனையை மீண்டும் விளக்கவும்."
+          : "This description does not clearly describe a maintenance issue. Please clarify the problem."
+    });
+  }
 
   const description_clean = await aiCleanDescription(newText);
 
