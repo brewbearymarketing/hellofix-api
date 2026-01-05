@@ -769,8 +769,17 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
-  const conversationState =
+  /* ================= FINAL MENU STATE LOCK ================= */
+const trimmedText = description_raw.trim();
+const isMenuReply = ["1", "2", "3"].includes(trimmedText);
+
+let conversationState =
   session?.state ?? "intake";
+
+/* 🔒 If menu reply + ticket exists → FORCE confirmation */
+if (isMenuReply && session?.current_ticket_id) {
+  conversationState = "awaiting_confirmation";
+}
 
     /* ================= HARD GUARD: MENU REPLIES ================= */
 /* 🔒 Prevent AI / intake logic from running on 1 / 2 / 3 */
