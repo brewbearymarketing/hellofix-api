@@ -832,7 +832,7 @@ if (conversationState === "intake") {
     return res.status(200).json({
       success: true,
       ignored: true,
-      reply_text: buildReplyText(tempLang, "greeting")
+      reply_text: buildReplyText(tempLang, "non_maintenance")
     });
   }
   }
