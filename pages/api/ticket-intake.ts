@@ -770,8 +770,8 @@ export default async function handler(
   .maybeSingle();
 
   /* ================= FINAL MENU STATE LOCK ================= */
-const trimmedText = description_raw.trim();
-const isMenuReply = ["1", "2", "3"].includes(trimmedText);
+const menuText = description_raw.trim();
+const isMenuReply = ["1", "2", "3"].includes(menuText);
 
 let conversationState =
   session?.state ?? "intake";
@@ -780,6 +780,7 @@ let conversationState =
 if (isMenuReply && session?.current_ticket_id) {
   conversationState = "awaiting_confirmation";
 }
+
 
     /* ================= HARD GUARD: MENU REPLIES ================= */
 /* 🔒 Prevent AI / intake logic from running on 1 / 2 / 3 */
