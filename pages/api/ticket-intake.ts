@@ -16,18 +16,6 @@ const openai = process.env.OPENAI_API_KEY
 console.log("OPENAI ENABLED:", !!openai);
 
 /* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
-/* ================= GREETING GUARD TO NOT RUN ONCE TIC CREATED FILTER ================= */
-const { data: latestTicket } = await supabase
-  .from("tickets")
-  .select("id, status")
-  .eq("condo_id", condo_id)
-  .eq("source", "whatsapp")
-  .order("created_at", { ascending: false })
-  .limit(1)
-  .maybeSingle();
-
-const hasEverCreatedTicket = !!latestTicket;
-
 /* ================= ABUSE / SPAM THROTTLING ================= */
 const THROTTLE_WINDOW_SECONDS = 60;
 const THROTTLE_SOFT_LIMIT = 5;
@@ -834,6 +822,18 @@ export default async function handler(
         });
       }
     }
+
+/* ================= GREETING GUARD TO NOT RUN ONCE TIC CREATED FILTER ================= */
+const { data: latestTicket } = await supabase
+  .from("tickets")
+  .select("id, status")
+  .eq("condo_id", condo_id)
+  .eq("source", "whatsapp")
+  .order("created_at", { ascending: false })
+  .limit(1)
+  .maybeSingle();
+
+const hasEverCreatedTicket = !!latestTicket;
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
