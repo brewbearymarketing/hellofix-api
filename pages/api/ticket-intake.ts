@@ -324,7 +324,8 @@ function buildReplyText(
   | "confirmed"
   | "non_maintenance",
   ticketId?: string,
-  descriptionDisplay?: string
+  descriptionDisplay?: string,
+  intentCategory?: "unit" | "common_area" | "mixed" | "uncertain"
 ): string {
   if (type === "greeting") {
     switch (lang) {
@@ -366,6 +367,10 @@ if (type === "greeting_firm") {
 }
 
 if (type === "intake_received") {
+  const intentLabel = intentCategory
+  ? formatIntentLabel(intentCategory, lang)
+  : null;
+
   const issue = descriptionDisplay
     ? `"${descriptionDisplay}"`
     : "";
@@ -374,6 +379,8 @@ if (type === "intake_received") {
     case "zh":
       return `🛠 维修工单已记录。
 我们理解您的问题是关于 ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
 
 请回复：
 1️⃣ 确认工单
@@ -384,6 +391,8 @@ if (type === "intake_received") {
       return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
 உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
 
+${intentLabel ? `வகை: ${intentLabel}\n` : ""}
+
 பதில்:
 1️⃣ டிக்கெட்டை உறுதி செய்ய
 2️⃣ விளக்கத்தை திருத்த
@@ -393,6 +402,8 @@ if (type === "intake_received") {
       return `🛠 Laporan penyelenggaraan telah direkodkan.
 Kami memahami bahawa isu anda berkaitan ${issue}
 
+${intentLabel ? `Kategori: ${intentLabel}\n` : ""}
+
 Sila balas:
 1️⃣ Sahkan tiket
 2️⃣ Edit keterangan
@@ -401,6 +412,8 @@ Sila balas:
     default:
       return `🛠 Maintenance ticket recorded.
 We understand that your issue relates to ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
 
 Please reply:
 1️⃣ Confirm ticket
@@ -1033,7 +1046,8 @@ const description_display =
   lang,
   "intake_received",
   undefined,
-  description_display
+  description_display,
+  intent_category
 )
     });
   } catch (err: any) {
