@@ -590,40 +590,6 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
-function formatIntentLabel(
-  intent: "unit" | "common_area" | "mixed" | "uncertain",
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const map = {
-    en: {
-      unit: "Unit",
-      common_area: "Common area",
-      mixed: "Unit & common area",
-      uncertain: "Uncertain"
-    },
-    ms: {
-      unit: "Unit kediaman",
-      common_area: "Kawasan bersama",
-      mixed: "Unit & kawasan bersama",
-      uncertain: "Tidak pasti"
-    },
-    zh: {
-      unit: "单位",
-      common_area: "公共区域",
-      mixed: "单位与公共区域",
-      uncertain: "不确定"
-    },
-    ta: {
-      unit: "தனிப்பட்ட யூனிட்",
-      common_area: "பொது பகுதி",
-      mixed: "யூனிட் மற்றும் பொது பகுதி",
-      uncertain: "தெளிவில்லை"
-    }
-  };
-
-  return map[lang][intent];
-}
-
 /* ================= MALAYSIAN AI NORMALISER ================= */
 async function aiCleanDescription(text: string): Promise<string> {
   if (!openai) return text;
@@ -1030,6 +996,41 @@ const description_display =
       detail: err.message
     });
   }
+}
+
+/*=============== HELPER ========================*/
+function formatIntentLabel(
+  intent: "unit" | "common_area" | "mixed" | "uncertain",
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map = {
+    en: {
+      unit: "Unit",
+      common_area: "Common area",
+      mixed: "Unit & common area",
+      uncertain: "Uncertain"
+    },
+    ms: {
+      unit: "Unit kediaman",
+      common_area: "Kawasan bersama",
+      mixed: "Unit & kawasan bersama",
+      uncertain: "Tidak pasti"
+    },
+    zh: {
+      unit: "单位",
+      common_area: "公共区域",
+      mixed: "单位与公共区域",
+      uncertain: "不确定"
+    },
+    ta: {
+      unit: "தனிப்பட்ட யூனிட்",
+      common_area: "பொது பகுதி",
+      mixed: "யூனிட் மற்றும் பொது பகுதி",
+      uncertain: "தெளிவில்லை"
+    }
+  };
+
+  return map[lang][intent];
 }
 
 /* =====================================================
