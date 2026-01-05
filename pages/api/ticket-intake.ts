@@ -772,6 +772,18 @@ export default async function handler(
   const conversationState =
   session?.state ?? "intake";
 
+    /* ================= HARD GUARD: MENU REPLIES ================= */
+/* 🔒 Prevent AI / intake logic from running on 1 / 2 / 3 */
+const trimmedText = description_raw.trim();
+const isMenuReply = ["1", "2", "3"].includes(trimmedText);
+
+if (isMenuReply && !session) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      "⚠️ Session expired. Please describe your maintenance issue again."
+  });
+}
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
@@ -789,6 +801,21 @@ export default async function handler(
     if (existingTicket?.language) {
       lang = existingTicket.language;
     }
+
+    /* ================= SESSION AUTO-RECOVERY ================= */
+/* 🔒 Restore session if ticket exists but session row is missing */
+if (!session && existingTicket) {
+  await supabase
+    .from("conversation_sessions")
+    .upsert({
+      condo_id,
+      phone_number,
+      current_ticket_id: existingTicket.id,
+      state: "awaiting_confirmation",
+      language: existingTicket.language ?? "en",
+      updated_at: new Date()
+    });
+}
 
     /* ============CONVERSATION STATE CHANNEL================ */
     if (conversationState !== "intake") {
@@ -886,7 +913,7 @@ return res.status(200).json({
 }
     
        /* ===== MEANINGFUL INTENT CHECK ===== */
-if (conversationState === "intake") {
+if (conversationState === "intake" && !isMenuReply) {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
