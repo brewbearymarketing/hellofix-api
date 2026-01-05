@@ -321,7 +321,8 @@ function buildReplyText(
   | "greeting_soft"
   | "greeting_firm"
   | "intake_received"
-  | "confirmed",
+  | "confirmed"
+  | "non_maintenance",
   ticketId?: string,
   descriptionDisplay?: string
 ): string {
@@ -405,6 +406,54 @@ Please reply:
 1️⃣ Confirm ticket
 2️⃣ Edit description
 3️⃣ Cancel ticket`;
+  }
+}
+
+  if (type === "non_maintenance") {
+  switch (lang) {
+    case "ms":
+      return (
+        "Terima kasih atas mesej anda 😊\n\n" +
+        "Kami mengesan bahawa mesej ini mungkin **bukan isu penyelenggaraan**.\n\n" +
+        "Contoh isu yang boleh dilaporkan:\n" +
+        "• Paip bocor\n" +
+        "• Lif rosak\n" +
+        "• Lampu tidak menyala\n\n" +
+        "Sila hantar masalah penyelenggaraan berkaitan unit atau kawasan bersama. Terima kasih!"
+      );
+
+    case "zh":
+      return (
+        "谢谢您的信息 😊\n\n" +
+        "我们发现这条信息**可能不是维修相关问题**。\n\n" +
+        "可提交的维修示例：\n" +
+        "• 水管漏水\n" +
+        "• 电梯故障\n" +
+        "• 灯不亮\n\n" +
+        "请重新发送与房屋或公共区域维修相关的问题。谢谢！"
+      );
+
+    case "ta":
+      return (
+        "உங்கள் செய்திக்கு நன்றி 😊\n\n" +
+        "இது **பராமரிப்பு சம்பந்தமான பிரச்சனை அல்ல** என்று தோன்றுகிறது.\n\n" +
+        "உதாரணமாக அனுப்பக்கூடிய பிரச்சனைகள்:\n" +
+        "• குழாய் கசிவு\n" +
+        "• லிப்ட் பழுது\n" +
+        "• விளக்கு எரியவில்லை\n\n" +
+        "தயவுசெய்து பராமரிப்பு தொடர்பான பிரச்சனையை அனுப்பவும். நன்றி!"
+      );
+
+    default:
+      return (
+        "Thanks for your message 😊\n\n" +
+        "It looks like this may **not be a maintenance-related issue**.\n\n" +
+        "Examples of accepted issues:\n" +
+        "• Leaking pipe\n" +
+        "• Lift not working\n" +
+        "• Light not functioning\n\n" +
+        "Please send a maintenance issue related to your unit or common area. Thank you!"
+      );
   }
 }
 
