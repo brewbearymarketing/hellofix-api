@@ -811,7 +811,7 @@ export default async function handler(
   }
 
 
-    if (throttle.level === "soft") {
+    if (throttle.level === "soft" && conversationState === "intake") {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
         const tempLang = lang ?? detectLanguage(description_raw);
