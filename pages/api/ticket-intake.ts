@@ -590,6 +590,40 @@ async function aiClassify(text: string): Promise<{
   }
 }
 
+function formatIntentLabel(
+  intent: "unit" | "common_area" | "mixed" | "uncertain",
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map = {
+    en: {
+      unit: "Unit",
+      common_area: "Common area",
+      mixed: "Unit & common area",
+      uncertain: "Uncertain"
+    },
+    ms: {
+      unit: "Unit kediaman",
+      common_area: "Kawasan bersama",
+      mixed: "Unit & kawasan bersama",
+      uncertain: "Tidak pasti"
+    },
+    zh: {
+      unit: "单位",
+      common_area: "公共区域",
+      mixed: "单位与公共区域",
+      uncertain: "不确定"
+    },
+    ta: {
+      unit: "தனிப்பட்ட யூனிட்",
+      common_area: "பொது பகுதி",
+      mixed: "யூனிட் மற்றும் பொது பகுதி",
+      uncertain: "தெளிவில்லை"
+    }
+  };
+
+  return map[lang][intent];
+}
+
 /* ================= MALAYSIAN AI NORMALISER ================= */
 async function aiCleanDescription(text: string): Promise<string> {
   if (!openai) return text;
@@ -1122,11 +1156,33 @@ if (!newText || newText.length < 10) {
 
   const description_clean = await aiCleanDescription(newText);
 
+  /* ================= RE-DETECT INTENT CATEGORY ================= */
+let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
+
+const commonHit = keywordMatch(newText, COMMON_AREA_KEYWORDS);
+const unitHit = keywordMatch(newText, OWN_UNIT_KEYWORDS);
+const ambiguousHit = keywordMatch(newText, AMBIGUOUS_KEYWORDS);
+
+if (commonHit && unitHit) {
+  intent_category = "mixed";
+} else if (commonHit && !ambiguousHit) {
+  intent_category = "common_area";
+} else if (unitHit && !ambiguousHit) {
+  intent_category = "unit";
+} else {
+  const ai = await aiClassify(newText);
+  if (ai.confidence >= 0.7) {
+    intent_category = ai.category;
+  }
+}
+
   await supabase
     .from("tickets")
     .update({
     description_raw: newText,
-    description_clean
+    description_clean,
+    intent_category,
+    updated_at: new Date()
   })
   .eq("id", session.current_ticket_id);
 
@@ -1158,6 +1214,8 @@ return res.status(200).json({
 Kami memahami isu anda berkaitan:
 "${description_display}"
 
+Kategori: ${intentLabel}
+
 Sila balas:
 1️⃣ Sahkan tiket
 2️⃣ Edit semula
@@ -1167,6 +1225,8 @@ Sila balas:
 
 我们理解您的问题是关于：
 "${description_display}"
+
+类别：${intentLabel}
 
 请回复：
 1️⃣ 确认工单
@@ -1178,6 +1238,8 @@ Sila balas:
 உங்கள் பிரச்சனை தொடர்புடையது:
 "${description_display}"
 
+வகை: ${intentLabel}
+
 பதில்:
 1️⃣ டிக்கெட்டை உறுதி செய்ய
 2️⃣ மீண்டும் திருத்த
@@ -1186,6 +1248,8 @@ Sila balas:
 
 We understand your issue relates to:
 "${description_display}"
+
+Category: ${intentLabel}
 
 Please reply:
 1️⃣ Confirm ticket
