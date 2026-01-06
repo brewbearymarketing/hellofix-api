@@ -810,6 +810,20 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
+/* ================= SESSION AUTO-RECOVERY ================= */
+if (!session && existingTicket) {
+  await supabase
+    .from("conversation_sessions")
+    .upsert({
+      condo_id,
+      phone_number,
+      current_ticket_id: existingTicket.id,
+      state: "awaiting_confirmation",
+      language: existingTicket.language ?? "en",
+      updated_at: new Date()
+    });
+}
+
 /* ===== DERIVE CONVERSATION STATE (SINGLE SOURCE OF TRUTH) ===== */
 const conversationState =
   session?.state ?? "intake";
