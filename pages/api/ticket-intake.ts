@@ -810,6 +810,10 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
+/* ===== DERIVE CONVERSATION STATE (SINGLE SOURCE OF TRUTH) ===== */
+const conversationState =
+  session?.state ?? "intake";
+
 /* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
 const menuText = description_raw.trim();
 const isMenuReply = ["1", "2", "3"].includes(menuText);
