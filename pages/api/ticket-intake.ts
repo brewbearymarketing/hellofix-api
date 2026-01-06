@@ -1299,6 +1299,7 @@ async function handleDraftEdit(
 ) {
   const newText = req.body.description_raw?.trim();
   const lang = session.language ?? "en";
+  const intentLabel = formatIntentLabel(intent_category, lang);
 
 if (!newText || newText.length < 10) {
   return res.status(200).json({
@@ -1327,21 +1328,11 @@ if (!newText || newText.length < 10) {
   .select("description_clean")
   .eq("id", session.current_ticket_id)
   .single();
-
-  const latestClean =
-    updatedTicket?.description_clean ?? description_clean;
-
-  const description_display =
-    lang === "en"
-      ? latestClean
-      : await aiTranslateForDisplay(latestClean, lang);
   
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
     .eq("id", session.id);
-
-const intentLabel = formatIntentLabel(intent_category, lang);
 
 return res.status(200).json({
   success: true,
@@ -1445,13 +1436,33 @@ async function handleEditCategory(
   return res.status(200).json({
     success: true,
     reply_text:
-      lang === "ms"
-        ? `🏷️ Kategori dikemaskini: ${label}\n\nBalas:\n1️⃣ Sahkan tiket\n2️⃣ Edit semula\n3️⃣ Batalkan tiket`
-        : lang === "zh"
-        ? `🏷️ 类别已更新：${label}\n\n回复：\n1️⃣ 确认\n2️⃣ 再次编辑\n3️⃣ 取消`
-        : lang === "ta"
-        ? `🏷️ வகை புதுப்பிக்கப்பட்டது: ${label}\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ மீண்டும் திருத்த\n3️⃣ ரத்து`
-        : `🏷️ Category updated: ${label}\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit again\n3️⃣ Cancel`
+  lang === "ms"
+    ? `🏷️ Kategori dikemaskini: ${label}
+
+Sila balas:
+1️⃣ Sahkan tiket
+2️⃣ Edit semula
+3️⃣ Batalkan tiket`
+    : lang === "zh"
+    ? `🏷️ 类别已更新：${label}
+
+请回复：
+1️⃣ 确认
+2️⃣ 再次编辑
+3️⃣ 取消`
+    : lang === "ta"
+    ? `🏷️ வகை புதுப்பிக்கப்பட்டது: ${label}
+
+பதில்:
+1️⃣ உறுதி
+2️⃣ மீண்டும் திருத்த
+3️⃣ ரத்து`
+    : `🏷️ Category updated: ${label}
+
+Reply:
+1️⃣ Confirm
+2️⃣ Edit again
+3️⃣ Cancel`
   });
 }
 
