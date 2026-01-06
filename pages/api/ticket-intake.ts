@@ -301,38 +301,6 @@ async function aiTranslateForDisplay(
   }
 }
 
-/* ================= AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
-async function aiTranslateForDisplay(
-  text: string,
-  targetLang: "en" | "ms" | "zh" | "ta"
-): Promise<string> {
-  if (!openai || targetLang === "en") return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Translate the text into the target language. " +
-            "Keep it short, natural, and suitable for WhatsApp display. " +
-            "Do NOT add explanations. Reply ONLY the translated text."
-        },
-        {
-          role: "user",
-          content: `Target language: ${targetLang}\nText: ${text}`
-        }
-      ]
-    });
-
-    return r.choices[0]?.message?.content?.trim() || text;
-  } catch {
-    return text; // fail-safe
-  }
-}
-
 /* ================= DETECT LANGUAGE ================= */
 function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
   const t = text.toLowerCase();
