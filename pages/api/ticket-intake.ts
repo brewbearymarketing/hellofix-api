@@ -811,10 +811,7 @@ export default async function handler(
   .maybeSingle();
 
 /* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
-const menuText = description_raw.trim();
-const isMenuReply = ["1", "2", "3"].includes(menuText);
 
-/**
  * 🔒 RULE:
  * Menu replies must NEVER be treated as intake, greeting, or AI text.
  * They must ALWAYS go through session-based handlers.
