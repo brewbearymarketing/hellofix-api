@@ -852,21 +852,6 @@ if (isMenuReply && !session) {
       lang = existingTicket.language;
     }
 
-    /* ================= SESSION AUTO-RECOVERY ================= */
-/* 🔒 Restore session if ticket exists but session row is missing */
-if (!session && existingTicket) {
-  await supabase
-    .from("conversation_sessions")
-    .upsert({
-      condo_id,
-      phone_number,
-      current_ticket_id: existingTicket.id,
-      state: "awaiting_confirmation",
-      language: existingTicket.language ?? "en",
-      updated_at: new Date()
-    });
-}
-
     /* ============CONVERSATION STATE CHANNEL================ */
     if (conversationState !== "intake") {
   switch (conversationState) {
@@ -921,6 +906,7 @@ if (!session && existingTicket) {
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
+  !isMenuReply &&
   conversationState === "intake" &&
   !session?.current_ticket_id &&
   isGreetingOnly(description_raw)
