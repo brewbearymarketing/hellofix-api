@@ -854,19 +854,6 @@ if (isMenuReply) {
       });
   }
 }
-
-    /* ================= HARD GUARD: MENU REPLIES ================= */
-/* 🔒 Prevent AI / intake logic from running on 1 / 2 / 3 */
-const trimmedText = description_raw.trim();
-const isMenuReply = ["1", "2", "3"].includes(trimmedText);
-
-if (isMenuReply && !session) {
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      "⚠️ Session expired. Please describe your maintenance issue again."
-  });
-}
     
     /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
