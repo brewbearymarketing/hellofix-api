@@ -780,7 +780,7 @@ async function normalizeIncomingMessage(body: any): Promise<string> {
 
   return cleanTranscript(text);
 }
-
+/*====================================================*/
 /* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
@@ -820,7 +820,6 @@ let conversationState =
 if (isMenuSelection && session?.current_ticket_id) {
   conversationState = "awaiting_confirmation";
 }
-
 
 
     /* ================= HARD GUARD: MENU REPLIES ================= */
@@ -920,22 +919,10 @@ if (!session && existingTicket) {
       }
     }
 
-/* ================= GREETING GUARD TO NOT RUN ONCE TIC CREATED FILTER ================= */
-const { data: latestTicket } = await supabase
-  .from("tickets")
-  .select("id, status")
-  .eq("condo_id", condo_id)
-  .eq("source", "whatsapp")
-  .order("created_at", { ascending: false })
-  .limit(1)
-  .maybeSingle();
-
-const hasEverCreatedTicket = !!latestTicket;
-
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
   conversationState === "intake" &&
-  !hasEverCreatedTicket &&
+  !session?.current_ticket_id &&
   isGreetingOnly(description_raw)
 ) {
 
@@ -1134,7 +1121,8 @@ const description_display =
   intent_category
 )
     });
-  } catch (err: any) {
+  } 
+  catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
@@ -1142,6 +1130,10 @@ const description_display =
     });
   }
 }
+
+
+
+
 
 /* =====================================================
    FOLLOW-UP HANDLERS (NO AI / NO THROTTLE)
