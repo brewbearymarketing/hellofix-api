@@ -1328,10 +1328,7 @@ if (!newText || newText.length < 10) {
   .eq("id", session.current_ticket_id)
   .single();
 
-  const intentLabel = formatIntentLabel(
-  ticket?.intent_category ?? "uncertain",
-  lang
-  );
+  const intentLabel = formatIntentLabel(intent_category,lang);
   
   await supabase
     .from("conversation_sessions")
