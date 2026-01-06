@@ -810,9 +810,22 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
-/* ================= SESSION AUTO-RECOVERY ================= */
+    /* ================= FETCH LATEST OPEN TICKET ================= */
+  const { data: existingTicket } = await supabase
+  .from("tickets")
+  .select("id, status, language")
+  .eq("condo_id", condo_id)
+  .in("status", ["new", "confirmed"])
+  .order("created_at", { ascending: false })
+  .limit(1)
+  .maybeSingle();
+
+
+/* ================= SESSION AUTO-RECOVERY (MANDATORY) ================= */
+let effectiveSession = session;
+
 if (!session && existingTicket) {
-  await supabase
+  const { data: recoveredSession } = await supabase
     .from("conversation_sessions")
     .upsert({
       condo_id,
@@ -821,37 +834,40 @@ if (!session && existingTicket) {
       state: "awaiting_confirmation",
       language: existingTicket.language ?? "en",
       updated_at: new Date()
-    });
+    })
+    .select()
+    .single();
+
+  effectiveSession = recoveredSession;
 }
 
 /* ===== DERIVE CONVERSATION STATE (SINGLE SOURCE OF TRUTH) ===== */
 const conversationState =
-  session?.state ?? "intake";
+  effectiveSession?.state ?? "intake";
 
 /* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
 const menuText = description_raw.trim();
 const isMenuReply = ["1", "2", "3"].includes(menuText);
-    
-if (isMenuReply) {
-  // Session missing → fail safely, do NOT fall back to intake
-  if (!session || !session.current_ticket_id) {
-    return res.status(200).json({
-      success: true,
-      reply_text:
-        "⚠️ Sesi anda telah tamat. Sila hantar semula masalah penyelenggaraan."
-    });
-  }
+
+if (isMenuReply && !effectiveSession?.current_ticket_id) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      "⚠️ Sesi anda telah tamat. Sila hantar semula masalah penyelenggaraan."
+  });
+}
 
   // Force state routing — ignore text length, greeting, AI, throttle
-  switch (session.state) {
+  if (conversationState !== "intake") {
+  switch (conversationState) {
     case "awaiting_confirmation":
-      return handleConfirmation(req, res, session);
+      return handleConfirmation(req, res, effectiveSession);
 
     case "edit_menu":
-      return handleEditMenu(req, res, session);
+      return handleEditMenu(req, res, effectiveSession);
 
     case "edit_category":
-      return handleEditCategory(req, res, session);
+      return handleEditCategory(req, res, effectiveSession);
 
     case "draft_edit":
       // Menu replies are invalid inside draft edit
@@ -864,7 +880,7 @@ if (isMenuReply) {
       });
 
     case "awaiting_payment":
-      return handlePayment(req, res, session);
+      return handlePayment(req, res, effectiveSession);
 
     default:
       // Absolute safety fallback
