@@ -871,13 +871,20 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
 
     case "draft_edit":
       // Menu replies are invalid inside draft edit
-      return res.status(200).json({
-        success: true,
-        reply_text:
-          session.language === "ms"
-            ? "Sila hantar keterangan isu, bukan pilihan menu."
-            : "Please send the issue description, not a menu option."
-      });
+      
+      const replyLang = session?.language ?? lang ?? "en";
+
+return res.status(200).json({
+  success: true,
+  reply_text:
+    replyLang === "ms"
+      ? "Sila hantar keterangan isu, bukan pilihan menu."
+      : replyLang === "zh"
+      ? "请发送问题描述，而不是菜单选项。"
+      : replyLang === "ta"
+      ? "மெனு தேர்வை அல்ல, பிரச்சனை விளக்கத்தை அனுப்பவும்."
+      : "Please send the issue description, not a menu option."
+});
 
     case "awaiting_payment":
       return handlePayment(req, res, effectiveSession);
