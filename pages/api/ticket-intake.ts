@@ -810,17 +810,58 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
-  /* ================= FINAL MENU STATE LOCK ================= */
+/* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
 const menuText = description_raw.trim();
-const isMenuSelection = ["1", "2", "3"].includes(menuText);
+const isMenuReply = ["1", "2", "3"].includes(menuText);
 
-let conversationState =
-  session?.state ?? "intake";
+/**
+ * 🔒 RULE:
+ * Menu replies must NEVER be treated as intake, greeting, or AI text.
+ * They must ALWAYS go through session-based handlers.
+ */
+if (isMenuReply) {
+  // Session missing → fail safely, do NOT fall back to intake
+  if (!session || !session.current_ticket_id) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        "⚠️ Sesi anda telah tamat. Sila hantar semula masalah penyelenggaraan."
+    });
+  }
 
-if (isMenuSelection && session?.current_ticket_id) {
-  conversationState = "awaiting_confirmation";
+  // Force state routing — ignore text length, greeting, AI, throttle
+  switch (session.state) {
+    case "awaiting_confirmation":
+      return handleConfirmation(req, res, session);
+
+    case "edit_menu":
+      return handleEditMenu(req, res, session);
+
+    case "edit_category":
+      return handleEditCategory(req, res, session);
+
+    case "draft_edit":
+      // Menu replies are invalid inside draft edit
+      return res.status(200).json({
+        success: true,
+        reply_text:
+          session.language === "ms"
+            ? "Sila hantar keterangan isu, bukan pilihan menu."
+            : "Please send the issue description, not a menu option."
+      });
+
+    case "awaiting_payment":
+      return handlePayment(req, res, session);
+
+    default:
+      // Absolute safety fallback
+      return res.status(200).json({
+        success: true,
+        reply_text:
+          "⚠️ Sila hantar semula masalah penyelenggaraan anda."
+      });
+  }
 }
-
 
     /* ================= HARD GUARD: MENU REPLIES ================= */
 /* 🔒 Prevent AI / intake logic from running on 1 / 2 / 3 */
