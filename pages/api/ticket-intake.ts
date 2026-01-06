@@ -211,9 +211,8 @@ async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
       messages: [
         {
           role: "system",
-          content:
-            content: 
-"You are a property maintenance gatekeeper for a condominium management system.
+          content: `
+You are a property maintenance gatekeeper for a condominium management system.
 
 Your task:
 Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
@@ -254,7 +253,8 @@ IMPORTANT RULES:
 - Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
 - If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
 - Greetings, chit-chat, testing messages, or unclear complaints → return false
-- Do NOT guess. If unsure but sounds like property maintenance → return true"
+- Do NOT guess. If unsure but sounds like property maintenance → return true
+`
         },
         { role: "user", content: text }
       ],
@@ -266,6 +266,38 @@ IMPORTANT RULES:
     return obj.is_issue === true;
   } catch {
     return true;
+  }
+}
+
+/* ================= AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
+async function aiTranslateForDisplay(
+  text: string,
+  targetLang: "en" | "ms" | "zh" | "ta"
+): Promise<string> {
+  if (!openai || targetLang === "en") return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the text into the target language. " +
+            "Keep it short, natural, and suitable for WhatsApp display. " +
+            "Do NOT add explanations. Reply ONLY the translated text."
+        },
+        {
+          role: "user",
+          content: `Target language: ${targetLang}\nText: ${text}`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text; // fail-safe
   }
 }
 
