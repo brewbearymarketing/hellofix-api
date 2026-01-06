@@ -1332,8 +1332,7 @@ if (!newText || newText.length < 10) {
   updatedTicket?.intent_category ?? "uncertain",
   lang);
 
-  const latestClean =
-  updatedTicket?.description_clean ?? description_clean;
+  const latestClean = updatedTicket?.description_clean ?? newText;
 
   const description_display =
   lang === "en"
