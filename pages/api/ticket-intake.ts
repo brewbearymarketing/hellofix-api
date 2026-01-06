@@ -811,11 +811,6 @@ export default async function handler(
   .maybeSingle();
 
 /* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
-
- * 🔒 RULE:
- * Menu replies must NEVER be treated as intake, greeting, or AI text.
- * They must ALWAYS go through session-based handlers.
- */
 if (isMenuReply) {
   // Session missing → fail safely, do NOT fall back to intake
   if (!session || !session.current_ticket_id) {
