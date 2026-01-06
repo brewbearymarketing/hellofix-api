@@ -1178,7 +1178,9 @@ async function handleConfirmation(
     await supabase
       .from("conversation_sessions")
       .update({ state: "awaiting_payment" })
-      .eq("id", session.id);
+      .eq("condo_id", session.condo_id)
+      .eq("phone_number", session.phone_number);
+
 
     const paymentUrl =
   `https://hellofix-api.vercel.app/api/pay?ticket_id=${ticketId}`;
@@ -1202,7 +1204,8 @@ if (text === "2") {
   await supabase
     .from("conversation_sessions")
     .update({ state: "edit_menu" })
-    .eq("id", session.id);
+    .eq("condo_id", session.condo_id)
+    .eq("phone_number", session.phone_number);
 
   return res.status(200).json({
     success: true,
@@ -1229,7 +1232,9 @@ if (text === "3") {
       state: "intake",
       current_ticket_id: null
     })
-    .eq("id", session.id);
+    .eq("condo_id", session.condo_id)
+    .eq("phone_number", session.phone_number);
+
 
   return res.status(200).json({
     success: true,
@@ -1250,7 +1255,9 @@ async function handleEditMenu(
     await supabase
       .from("conversation_sessions")
       .update({ state: "draft_edit" })
-      .eq("id", session.id);
+      .eq("condo_id", session.condo_id)
+      .eq("phone_number", session.phone_number);
+
 
     return res.status(200).json({
       success: true,
@@ -1269,7 +1276,9 @@ async function handleEditMenu(
     await supabase
       .from("conversation_sessions")
       .update({ state: "edit_category" })
-      .eq("id", session.id);
+      .eq("condo_id", session.condo_id)
+      .eq("phone_number", session.phone_number);
+
 
     return res.status(200).json({
       success: true,
@@ -1347,7 +1356,9 @@ if (!newText || newText.length < 10) {
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
-    .eq("id", session.id);
+    .eq("condo_id", session.condo_id)
+    .eq("phone_number", session.phone_number);
+
 
 return res.status(200).json({
   success: true,
@@ -1444,7 +1455,9 @@ async function handleEditCategory(
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
-    .eq("id", session.id);
+    .eq("condo_id", session.condo_id)
+    .eq("phone_number", session.phone_number);
+
 
   const label = formatIntentLabel(selected, lang);
 
@@ -1509,7 +1522,9 @@ async function handlePayment(
         state: "intake",
         current_ticket_id: null
       })
-      .eq("id", session.id);
+      .eq("condo_id", session.condo_id)
+      .eq("phone_number", session.phone_number);
+
 
     return res.status(200).json({
       success: true,
