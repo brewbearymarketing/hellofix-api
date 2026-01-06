@@ -833,6 +833,12 @@ if (!session && existingTicket) {
     case "draft_edit":
       return handleDraftEdit(req, res, session);
 
+  case "edit_menu":
+    return handleEditMenu(req, res, session);
+
+  case "edit_category":
+  return handleEditCategory(req, res, session);
+
     case "awaiting_confirmation":
       return handleConfirmation(req, res, session);
 
@@ -1146,17 +1152,24 @@ async function handleConfirmation(
 });
   }
 
-  if (text === "2") {
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "draft_edit" })
-      .eq("id", session.id);
+if (text === "2") {
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "edit_menu" })
+    .eq("id", session.id);
 
-    return res.status(200).json({
-      success: true,
-      reply_text: buildFollowUpReply(lang, "ask_edit")
-    });
-  }
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "✏️ Apa yang anda ingin edit?\n1️⃣ Edit keterangan\n2️⃣ Edit kategori"
+        : lang === "zh"
+        ? "✏️ 您要编辑什么？\n1️⃣ 编辑描述\n2️⃣ 编辑类别"
+        : lang === "ta"
+        ? "✏️ நீங்கள் எதை திருத்த விரும்புகிறீர்கள்?\n1️⃣ விளக்கம்\n2️⃣ வகை"
+        : "✏️ What would you like to edit?\n1️⃣ Edit description\n2️⃣ Edit category"
+  });
+}
 
 if (text === "3") {
   await supabase
@@ -1177,6 +1190,65 @@ if (text === "3") {
     reply_text: buildFollowUpReply(lang, "cancelled")
   });
 }
+}
+
+async function handleEditMenu(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
+
+  if (text === "1") {
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "draft_edit" })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "✏️ Sila hantar keterangan isu yang baharu."
+          : lang === "zh"
+          ? "✏️ 请发送新的问题描述。"
+          : lang === "ta"
+          ? "✏️ தயவுசெய்து புதிய பிரச்சனை விளக்கத்தை அனுப்பவும்."
+          : "✏️ Please send the new issue description."
+    });
+  }
+
+  if (text === "2") {
+    await supabase
+      .from("conversation_sessions")
+      .update({ state: "edit_category" })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "🏷️ Pilih kategori:\n1️⃣ Unit\n2️⃣ Kawasan bersama\n3️⃣ Campuran"
+          : lang === "zh"
+          ? "🏷️ 选择类别：\n1️⃣ 单位\n2️⃣ 公共区域\n3️⃣ 混合"
+          : lang === "ta"
+          ? "🏷️ வகையைத் தேர்வு செய்யவும்:\n1️⃣ யூனிட்\n2️⃣ பொது பகுதி\n3️⃣ கலப்பு"
+          : "🏷️ Select category:\n1️⃣ Unit\n2️⃣ Common area\n3️⃣ Mixed"
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "Sila balas dengan 1 atau 2 sahaja."
+        : lang === "zh"
+        ? "请只回复 1 或 2。"
+        : lang === "ta"
+        ? "1 அல்லது 2 மட்டும் பதிலளிக்கவும்."
+        : "Please reply with 1 or 2 only."
+  });
 }
 
 async function handleDraftEdit(
@@ -1322,6 +1394,65 @@ Please reply:
 2️⃣ Edit again
 3️⃣ Cancel ticket`
 });
+}
+
+async function handleEditCategory(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
+
+  const map: Record<string, "unit" | "common_area" | "mixed"> = {
+    "1": "unit",
+    "2": "common_area",
+    "3": "mixed"
+  };
+
+  const selected = map[text];
+
+  if (!selected) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila pilih 1, 2 atau 3."
+          : lang === "zh"
+          ? "请选择 1、2 或 3。"
+          : lang === "ta"
+          ? "1, 2 அல்லது 3 தேர்வு செய்யவும்."
+          : "Please select 1, 2, or 3."
+    });
+  }
+
+  await supabase
+    .from("tickets")
+    .update({
+      intent_category: selected,
+      intent_source: "user",
+      updated_at: new Date()
+    })
+    .eq("id", session.current_ticket_id);
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_confirmation" })
+    .eq("id", session.id);
+
+  const label = formatIntentLabel(selected, lang);
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? `🏷️ Kategori dikemaskini: ${label}\n\nBalas:\n1️⃣ Sahkan tiket\n2️⃣ Edit semula\n3️⃣ Batalkan tiket`
+        : lang === "zh"
+        ? `🏷️ 类别已更新：${label}\n\n回复：\n1️⃣ 确认\n2️⃣ 再次编辑\n3️⃣ 取消`
+        : lang === "ta"
+        ? `🏷️ வகை புதுப்பிக்கப்பட்டது: ${label}\n\nபதில்:\n1️⃣ உறுதி\n2️⃣ மீண்டும் திருத்த\n3️⃣ ரத்து`
+        : `🏷️ Category updated: ${label}\n\nReply:\n1️⃣ Confirm\n2️⃣ Edit again\n3️⃣ Cancel`
+  });
 }
 
 async function handlePayment(
