@@ -212,8 +212,49 @@ async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
         {
           role: "system",
           content:
-            "Reply ONLY JSON: {\"is_issue\": true|false}. " +
-            "True ONLY if message describes a real property maintenance problem."
+            content: 
+"You are a property maintenance gatekeeper for a condominium management system.
+
+Your task:
+Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
+
+Reply ONLY in JSON:
+{"is_issue": true|false}
+
+ACCEPT (return true) if the issue involves:
+- Building-attached or unit-attached assets
+- Fixtures that are part of the property or permanently installed
+
+Examples that MUST be accepted:
+- Water leaks, pipes, toilets, sinks, drains
+- Electrical wiring, switches, wall sockets
+- Ceiling fans
+- Air conditioners (AC, aircond)
+- Built-in lights or lamps
+- Doors, windows, sliding doors
+- Walls, ceilings, floors
+- Lift, corridor, lobby, parking, staircase
+- Any structural, plumbing, electrical, or mechanical issue related to the condo or unit
+
+REJECT (return false) if the issue involves:
+- Personal lifestyle or movable appliances
+- Items that are NOT permanently attached to the building
+
+Examples that MUST be rejected:
+- Television (TV)
+- Washing machine
+- Refrigerator
+- Microwave
+- Rice cooker
+- Laptop, phone, router
+- Furniture (sofa, table, bed)
+- Personal electronics or gadgets
+
+IMPORTANT RULES:
+- Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
+- If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
+- Greetings, chit-chat, testing messages, or unclear complaints → return false
+- Do NOT guess. If unsure but sounds like property maintenance → return true"
         },
         { role: "user", content: text }
       ],
@@ -1271,45 +1312,6 @@ if (!newText || newText.length < 10) {
         ? "தயவுசெய்து பிரச்சனையை தெளிவாக விவரிக்கவும்."
         : "Please provide a clearer description of the issue."
   });
-}
-
-  /* ================= RE-RUN MEANINGFUL INTENT (EDIT ONLY) ================= */
-  const hasMeaningfulIntent = await aiIsMeaningfulIssue(newText);
-
-  if (!hasMeaningfulIntent) {
-    return res.status(200).json({
-      success: true,
-      reply_text:
-        lang === "ms"
-          ? "Penerangan ini masih belum jelas sebagai isu penyelenggaraan. Sila nyatakan masalah sebenar (contoh: paip bocor, lif rosak)."
-          : lang === "zh"
-          ? "该描述尚未清楚说明维修问题。请重新描述实际的维护问题。"
-          : lang === "ta"
-          ? "இந்த விளக்கம் பராமரிப்பு பிரச்சனையாக தெளிவாக இல்லை. தயவுசெய்து பிரச்சனையை மீண்டும் விளக்கவும்."
-          : "This description does not clearly describe a maintenance issue. Please clarify the problem."
-    });
-  }
-
-  const description_clean = await aiCleanDescription(newText);
-
-  /* ================= RE-DETECT INTENT CATEGORY ================= */
-let intent_category: "unit" | "common_area" | "mixed" | "uncertain" = "uncertain";
-
-const commonHit = keywordMatch(newText, COMMON_AREA_KEYWORDS);
-const unitHit = keywordMatch(newText, OWN_UNIT_KEYWORDS);
-const ambiguousHit = keywordMatch(newText, AMBIGUOUS_KEYWORDS);
-
-if (commonHit && unitHit) {
-  intent_category = "mixed";
-} else if (commonHit && !ambiguousHit) {
-  intent_category = "common_area";
-} else if (unitHit && !ambiguousHit) {
-  intent_category = "unit";
-} else {
-  const ai = await aiClassify(newText);
-  if (ai.confidence >= 0.7) {
-    intent_category = ai.category;
-  }
 }
 
   await supabase
