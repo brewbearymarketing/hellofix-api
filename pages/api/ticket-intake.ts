@@ -1330,8 +1330,15 @@ if (!newText || newText.length < 10) {
 
   const intentLabel = formatIntentLabel(
   updatedTicket?.intent_category ?? "uncertain",
-  lang
-);
+  lang);
+
+  const latestClean =
+  updatedTicket?.description_clean ?? description_clean;
+
+  const description_display =
+  lang === "en"
+    ? latestClean
+    : await aiTranslateForDisplay(latestClean, lang);
   
   await supabase
     .from("conversation_sessions")
