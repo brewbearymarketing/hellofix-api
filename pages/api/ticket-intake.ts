@@ -1318,7 +1318,6 @@ if (!newText || newText.length < 10) {
     .from("tickets")
     .update({
     description_raw: newText,
-    description_clean,
     intent_category,
     updated_at: new Date()
   })
