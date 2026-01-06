@@ -811,6 +811,9 @@ export default async function handler(
   .maybeSingle();
 
 /* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
+const menuText = description_raw.trim();
+const isMenuReply = ["1", "2", "3"].includes(menuText);
+    
 if (isMenuReply) {
   // Session missing → fail safely, do NOT fall back to intake
   if (!session || !session.current_ticket_id) {
