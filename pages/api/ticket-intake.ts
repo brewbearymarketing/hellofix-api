@@ -872,7 +872,11 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
     case "draft_edit":
       // Menu replies are invalid inside draft edit
       
-      const replyLang = session?.language ?? lang ?? "en";
+      const replyLang =
+  session?.language ??
+  (existingTicket?.language as "en" | "ms" | "zh" | "ta" | undefined) ??
+  detectLanguage(description_raw);
+
 
 return res.status(200).json({
   success: true,
