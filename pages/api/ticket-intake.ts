@@ -896,14 +896,6 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
   /* ============CHECK EXISTING CONVERSATION LANGUAGE================ */
-    const { data: existingTicket } = await supabase
-      .from("tickets")
-      .select("id, language")
-      .eq("condo_id", condo_id)
-      .eq("status", "new")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
 
     if (existingTicket?.language) {
       lang = existingTicket.language;
