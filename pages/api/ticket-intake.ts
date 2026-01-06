@@ -1299,7 +1299,6 @@ async function handleDraftEdit(
 ) {
   const newText = req.body.description_raw?.trim();
   const lang = session.language ?? "en";
-  const intentLabel = formatIntentLabel(intent_category, lang);
 
 if (!newText || newText.length < 10) {
   return res.status(200).json({
@@ -1325,9 +1324,14 @@ if (!newText || newText.length < 10) {
 
   const { data: updatedTicket } = await supabase
   .from("tickets")
-  .select("description_clean")
+  .select("intent_category,description_clean")
   .eq("id", session.current_ticket_id)
   .single();
+
+  const intentLabel = formatIntentLabel(
+  ticket?.intent_category ?? "uncertain",
+  lang
+  );
   
   await supabase
     .from("conversation_sessions")
