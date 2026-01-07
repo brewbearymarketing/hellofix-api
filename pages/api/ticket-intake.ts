@@ -91,6 +91,7 @@ async function coreHandler(
   res: NextApiResponse,
   body: any
 ) {
+  try{
   const { condo_id, phone_number } = body;
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
@@ -427,8 +428,8 @@ const description_display =
       error: "Internal Server Error",
       detail: err.message
     });
+  }
 }
-
 
 /* =====================================================
    SINGLE STATE ROUTER (AUTHORITATIVE)
