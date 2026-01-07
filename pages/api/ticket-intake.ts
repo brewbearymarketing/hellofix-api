@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { toFile } from "openai/uploads";
 
-/* ================= CLIENTS ================= */
+/* ================= ⭐CLIENTS ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -15,773 +15,36 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
-/* ================= HELPER/REUSABLE FUNCTION ALL BELOW THIS ================= */
-/* ================= ABUSE / SPAM THROTTLING ================= */
-const THROTTLE_WINDOW_SECONDS = 60;
-const THROTTLE_SOFT_LIMIT = 5;
-const THROTTLE_HARD_LIMIT = 8;
-const THROTTLE_BLOCK_MINUTES = 5;
-
-async function checkThrottle(
-  condo_id: string,
-  phone_number: string
-): Promise<{
-  allowed: boolean;
-  level: "ok" | "soft" | "blocked";
-  count: number;
-}> {
-  const now = new Date();
-
-  const { data, error } = await supabase
-    .from("message_throttle")
-    .select("*")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
-
-  // Fail open
-  if (error) {
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  // First message
-  if (!data) {
-    await supabase.from("message_throttle").insert({
-      condo_id,
-      phone_number,
-      message_count: 1,
-      blocked_until: null,
-      updated_at: now
-    });
-
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  // Hard blocked
-  if (data.blocked_until && new Date(data.blocked_until) > now) {
-    return {
-      allowed: false,
-      level: "blocked",
-      count: data.message_count
-    };
-  }
-
-  const windowStart = new Date(data.first_seen_at);
-  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
-
-  // Window expired → reset
-  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
-    await supabase
-      .from("message_throttle")
-      .update({
-        message_count: 1,
-        first_seen_at: now,
-        blocked_until: null,
-        updated_at: now
-      })
-      .eq("id", data.id);
-
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  const newCount = data.message_count + 1;
-
-  // Hard limit
-  if (newCount > THROTTLE_HARD_LIMIT) {
-    const blockedUntil = new Date(
-      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
-    );
-
-    await supabase
-      .from("message_throttle")
-      .update({
-        message_count: newCount,
-        blocked_until: blockedUntil,
-        updated_at: now
-      })
-      .eq("id", data.id);
-
-    return {
-      allowed: false,
-      level: "blocked",
-      count: newCount
-    };
-  }
-
-  // Soft / normal
-  await supabase
-    .from("message_throttle")
-    .update({
-      message_count: newCount,
-      updated_at: now
-    })
-    .eq("id", data.id);
-
-  return {
-    allowed: true,
-    level: newCount > THROTTLE_SOFT_LIMIT ? "soft" : "ok",
-    count: newCount
-  };
-}
-
-/* ================= THROTTLE NOTICE ================= */
-function buildThrottleNotice(
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  switch (lang) {
-    case "ms":
-      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
-    case "zh":
-      return "您发送消息过于频繁。请稍等片刻后再发送。";
-    case "ta":
-      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
-    default:
-      return "You are sending messages too quickly. Please wait a moment before sending another message.";
-  }
-}
-
-/* ================= KEYWORDS ================= */
-const COMMON_AREA_KEYWORDS = [
-  "lobby","lift","elevator","parking","corridor","staircase",
-  "garbage","trash","bin room","pool","gym",
-  "lif","lobi","koridor","tangga","tempat letak kereta",
-  "rumah sampah","tong sampah",
-  "电梯","走廊","停车场","垃圾房","泳池",
-  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
-];
-
-const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
-  "master toilet","house bathroom","house lamp","room lamp",
-  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
-  "bilik air rumah","lampu rumah","lampu bilik",
-  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
-  "அறை","சமையலறை"
-];
-
-const AMBIGUOUS_KEYWORDS = [
-  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
-  "厕所","空调","கழிப்பிடம்","चिराग","灯"
-];
-
-/* ===== GREETING GUARD 1/ NO-INTENT KEYWORDS ===== */
-const GREETING_KEYWORDS = [
-  "hi","hello","hey","morning","afternoon","evening",
-  "good morning","good afternoon","good evening",
-  "thanks","thank you","tq","ok","okay","noted",
-  "test","testing","yo","boss","bro","sis",
-
-  // Malay
-  "hai","helo","selamat pagi","selamat petang","selamat malam",
-  "terima kasih","okey",
-
-  // Chinese
-  "你好","早安","晚安","谢谢",
-
-  // Tamil
-  "வணக்கம்","நன்றி"
-];
-
-function keywordMatch(text: string, keywords: string[]) {
-  const t = text.toLowerCase();
-  return keywords.some(k => t.includes(k.toLowerCase()));
-}
-
-/* ===== GREETING GUARD 2 ===== */
-function isGreetingOnly(text: string): boolean {
-  const t = text.toLowerCase().trim();
-
-  // Very short messages are almost always noise
-  if (t.length <= 6) return true;
-
-  // Pure greeting
-  return GREETING_KEYWORDS.some(
-    k => t === k || t.startsWith(k + " ")
-  );
-}
-
-/* ===== GREETING GUARD 3/ AI MEANINGFUL ISSUE CHECK (BANK-GRADE) ===== */
-async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
-  if (!openai) return true; // fail-open
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a property maintenance gatekeeper for a condominium management system.
-
-Your task:
-Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
-
-Reply ONLY in JSON:
-{"is_issue": true|false}
-
-ACCEPT (return true) if the issue involves:
-- Building-attached or unit-attached assets
-- Fixtures that are part of the property or permanently installed
-
-Examples that MUST be accepted:
-- Water leaks, pipes, toilets, sinks, drains
-- Electrical wiring, switches, wall sockets
-- Ceiling fans
-- Air conditioners (AC, aircond)
-- Built-in lights or lamps
-- Doors, windows, sliding doors
-- Walls, ceilings, floors
-- Lift, corridor, lobby, parking, staircase
-- Any structural, plumbing, electrical, or mechanical issue related to the condo or unit
-
-REJECT (return false) if the issue involves:
-- Personal lifestyle or movable appliances
-- Items that are NOT permanently attached to the building
-
-Examples that MUST be rejected:
-- Television (TV)
-- Washing machine
-- Refrigerator
-- Microwave
-- Rice cooker
-- Laptop, phone, router
-- Furniture (sofa, table, bed)
-- Personal electronics or gadgets
-
-IMPORTANT RULES:
-- Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
-- If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
-- Greetings, chit-chat, testing messages, or unclear complaints → return false
-- Do NOT guess. If unsure but sounds like property maintenance → return true
-`
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-    return obj.is_issue === true;
-  } catch {
-    return true;
-  }
-}
-
-/* ================= AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
-async function aiTranslateForDisplay(
-  text: string,
-  targetLang: "en" | "ms" | "zh" | "ta"
-): Promise<string> {
-  if (!openai || targetLang === "en") return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Translate the text into the target language. " +
-            "Keep it short, natural, and suitable for WhatsApp display. " +
-            "Do NOT add explanations. Reply ONLY the translated text."
-        },
-        {
-          role: "user",
-          content: `Target language: ${targetLang}\nText: ${text}`
-        }
-      ]
-    });
-
-    return r.choices[0]?.message?.content?.trim() || text;
-  } catch {
-    return text; // fail-safe
-  }
-}
-
-/* ================= DETECT LANGUAGE ================= */
-function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
-  const t = text.toLowerCase();
-
-  if (/[\u4e00-\u9fff]/.test(t)) return "zh"; // Chinese
-  if (/[\u0b80-\u0bff]/.test(t)) return "ta"; // Tamil
-
-  if (
-    t.includes("hai") ||
-    t.includes("selamat") ||
-    t.includes("terima kasih")
-  ) return "ms";
-
-  return "en";
-}
-
-/* ================= AI LANGUAGE DETECTOR ================= */
-async function aiDetectLanguage(
-  text: string
-): Promise<"en" | "ms" | "zh" | "ta"> {
-  if (!openai) return "en";
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Detect the primary language of the message. " +
-            "Reply ONLY JSON: {\"lang\": \"en\"|\"ms\"|\"zh\"|\"ta\"}. " +
-            "Malay = ms. Ignore greetings."
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-
-    if (["en", "ms", "zh", "ta"].includes(obj.lang)) {
-      return obj.lang;
-    }
-
-    return "en";
-  } catch {
-    return "en";
-  }
-}
-
-
-/* ================= BANK GRADE REPLY GENERATOR ================= */
-function buildReplyText(
-  lang: "en" | "ms" | "zh" | "ta",
-  type:
-  | "greeting"
-  | "greeting_soft"
-  | "greeting_firm"
-  | "intake_received"
-  | "confirmed"
-  | "non_maintenance",
-  ticketId?: string,
-  descriptionDisplay?: string,
-  intentCategory?: "unit" | "common_area" | "mixed" | "uncertain"
-): string {
-  if (type === "greeting") {
-    switch (lang) {
-      case "zh":
-        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
-      case "ta":
-        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
-      case "ms":
-        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
-      default:
-        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
-    }
-  }
-
-if (type === "greeting_soft") {
-  switch (lang) {
-    case "ms":
-      return "Sekadar peringatan kecil 🙂\nSila terangkan masalah penyelenggaraan supaya kami boleh buka tiket untuk anda.";
-    case "zh":
-      return "小提醒一下 🙂\n请描述维修问题，以便我们为您创建工单。";
-    case "ta":
-      return "ஒரு சிறிய நினைவூட்டல் 🙂\nடிக்கெட் உருவாக்க, தயவுசெய்து பராமரிப்பு பிரச்சனையை விவரிக்கவும்.";
-    default:
-      return "Just a quick reminder 🙂\nPlease describe the maintenance issue so we can create a ticket for you.";
-  }
-}
-
-if (type === "greeting_firm") {
-  switch (lang) {
-    case "ms":
-      return "Untuk meneruskan, kami perlukan penerangan ringkas mengenai masalah penyelenggaraan.\nSelepas itu, kami akan uruskan selebihnya.";
-    case "zh":
-      return "要继续处理，我们需要您简要说明维修问题。\n收到后，我们将为您安排后续。";
-    case "ta":
-      return "தொடர, தயவுசெய்து பராமரிப்பு பிரச்சனையை சுருக்கமாக விளக்கவும்.\nமீதியைக் kami uruskan.";
-    default:
-      return "To proceed, we’ll need a brief description of the maintenance issue.\nOnce received, we’ll take care of the rest.";
-  }
-}
-
-if (type === "intake_received") {
-  const intentLabel = intentCategory
-  ? formatIntentLabel(intentCategory, lang)
-  : null;
-
-  const issue = descriptionDisplay
-    ? `"${descriptionDisplay}"`
-    : "";
-
-  switch (lang) {
-    case "zh":
-      return `🛠 维修工单已记录。
-我们理解您的问题是关于 ${issue}
-
-${intentLabel ? `Category: ${intentLabel}\n` : ""}
-
-请回复：
-1️⃣ 确认工单
-2️⃣ 编辑描述
-3️⃣ 取消工单`;
-
-    case "ta":
-      return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
-உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
-
-${intentLabel ? `வகை: ${intentLabel}\n` : ""}
-
-பதில்:
-1️⃣ டிக்கெட்டை உறுதி செய்ய
-2️⃣ விளக்கத்தை திருத்த
-3️⃣ டிக்கெட்டை ரத்து செய்ய`;
-
-    case "ms":
-      return `🛠 Laporan penyelenggaraan telah direkodkan.
-Kami memahami bahawa isu anda berkaitan ${issue}
-
-${intentLabel ? `Kategori: ${intentLabel}\n` : ""}
-
-Sila balas:
-1️⃣ Sahkan tiket
-2️⃣ Edit keterangan
-3️⃣ Batalkan tiket`;
-
-    default:
-      return `🛠 Maintenance ticket recorded.
-We understand that your issue relates to ${issue}
-
-${intentLabel ? `Category: ${intentLabel}\n` : ""}
-
-Please reply:
-1️⃣ Confirm ticket
-2️⃣ Edit description
-3️⃣ Cancel ticket`;
-  }
-}
-
-  if (type === "non_maintenance") {
-  switch (lang) {
-    case "ms":
-      return (
-        "Terima kasih atas mesej anda 😊\n\n" +
-        "Kami mengesan bahawa mesej ini mungkin **bukan isu penyelenggaraan**.\n\n" +
-        "Contoh isu yang boleh dilaporkan:\n" +
-        "• Paip bocor\n" +
-        "• Lif rosak\n" +
-        "• Lampu tidak menyala\n\n" +
-        "Sila hantar masalah penyelenggaraan berkaitan unit atau kawasan bersama. Terima kasih!"
-      );
-
-    case "zh":
-      return (
-        "谢谢您的信息 😊\n\n" +
-        "我们发现这条信息**可能不是维修相关问题**。\n\n" +
-        "可提交的维修示例：\n" +
-        "• 水管漏水\n" +
-        "• 电梯故障\n" +
-        "• 灯不亮\n\n" +
-        "请重新发送与房屋或公共区域维修相关的问题。谢谢！"
-      );
-
-    case "ta":
-      return (
-        "உங்கள் செய்திக்கு நன்றி 😊\n\n" +
-        "இது **பராமரிப்பு சம்பந்தமான பிரச்சனை அல்ல** என்று தோன்றுகிறது.\n\n" +
-        "உதாரணமாக அனுப்பக்கூடிய பிரச்சனைகள்:\n" +
-        "• குழாய் கசிவு\n" +
-        "• லிப்ட் பழுது\n" +
-        "• விளக்கு எரியவில்லை\n\n" +
-        "தயவுசெய்து பராமரிப்பு தொடர்பான பிரச்சனையை அனுப்பவும். நன்றி!"
-      );
-
-    default:
-      return (
-        "Thanks for your message 😊\n\n" +
-        "It looks like this may **not be a maintenance-related issue**.\n\n" +
-        "Examples of accepted issues:\n" +
-        "• Leaking pipe\n" +
-        "• Lift not working\n" +
-        "• Light not functioning\n\n" +
-        "Please send a maintenance issue related to your unit or common area. Thank you!"
-      );
-  }
-}
-
-  // confirmed
-  switch (lang) {
-    case "zh":
-      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
-    case "ta":
-      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
-    case "ms":
-      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
-    default:
-      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
-  }
-}
-
-/* ================= FOLLOW-UP REPLY TEXT ================= */
-function buildFollowUpReply(
-  lang: "en" | "ms" | "zh" | "ta",
-  type:
-    | "confirm_success"
-    | "ask_edit"
-    | "cancelled"
-    | "payment_prompt"
-    | "invalid_confirm"
-    | "invalid_payment"
-): string {
-  switch (type) {
-    case "confirm_success":
-      switch (lang) {
-        case "ms":
-          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30\nBalas PAY untuk teruskan pembayaran.";
-        case "zh":
-          return "✅ 工单已确认。\n检查费用：RM30\n回复 PAY 以继续付款。";
-        case "ta":
-          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30\nபணம் செலுத்த PAY என பதிலளிக்கவும்.";
-        default:
-          return "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed.";
-      }
-
-    case "ask_edit":
-      switch (lang) {
-        case "ms":
-          return "✏️ Sila balas dengan penerangan isu yang dikemaskini.";
-        case "zh":
-          return "✏️ 请回复更新后的问题描述。";
-        case "ta":
-          return "✏️ தயவுசெய்து திருத்தப்பட்ட பிரச்சனை விளக்கத்தை அனுப்பவும்.";
-        default:
-          return "✏️ Please reply with the corrected issue description.";
-      }
-
-    case "cancelled":
-      switch (lang) {
-        case "ms":
-          return "❌ Tiket telah dibatalkan.";
-        case "zh":
-          return "❌ 工单已取消。";
-        case "ta":
-          return "❌ டிக்கெட் ரத்து செய்யப்பட்டது.";
-        default:
-          return "❌ Ticket cancelled.";
-      }
-
-    case "payment_prompt":
-      switch (lang) {
-        case "ms":
-          return "💳 Balas PAY untuk membuat pembayaran atau CANCEL untuk batalkan tiket.";
-        case "zh":
-          return "💳 回复 PAY 进行付款，或回复 CANCEL 取消工单。";
-        case "ta":
-          return "💳 பணம் செலுத்த PAY அல்லது ரத்து செய்ய CANCEL என பதிலளிக்கவும்.";
-        default:
-          return "💳 Reply PAY to proceed or CANCEL to cancel the ticket.";
-      }
-
-    case "invalid_confirm":
-      switch (lang) {
-        case "ms":
-          return "Sila balas dengan 1, 2 atau 3 sahaja.";
-        case "zh":
-          return "请仅回复 1、2 或 3。";
-        case "ta":
-          return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
-        default:
-          return "Please reply with 1, 2, or 3 only.";
-      }
-
-    case "invalid_payment":
-      switch (lang) {
-        case "ms":
-          return "Sila balas PAY atau CANCEL sahaja.";
-        case "zh":
-          return "请仅回复 PAY 或 CANCEL。";
-        case "ta":
-          return "PAY அல்லது CANCEL மட்டுமே பதிலளிக்கவும்.";
-        default:
-          return "Please reply PAY or CANCEL only.";
-      }
-  }
-}
-
-/* ================= AI CLASSIFIER ================= */
-async function aiClassify(text: string): Promise<{
-  category: "unit" | "common_area" | "mixed" | "uncertain";
-  confidence: number;
-}> {
-  if (!openai) return { category: "uncertain", confidence: 0 };
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-
-    return {
-      category: obj.category ?? "uncertain",
-      confidence: Number(obj.confidence ?? 0)
-    };
-  } catch {
-    return { category: "uncertain", confidence: 0 };
-  }
-}
-
-/*=============== HELPER ========================*/
-function formatIntentLabel(
-  intent: "unit" | "common_area" | "mixed" | "uncertain",
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const map = {
-    en: {
-      unit: "Unit",
-      common_area: "Common area",
-      mixed: "Unit & common area",
-      uncertain: "Uncertain"
-    },
-    ms: {
-      unit: "Unit kediaman",
-      common_area: "Kawasan bersama",
-      mixed: "Unit & kawasan bersama",
-      uncertain: "Tidak pasti"
-    },
-    zh: {
-      unit: "单位",
-      common_area: "公共区域",
-      mixed: "单位与公共区域",
-      uncertain: "不确定"
-    },
-    ta: {
-      unit: "தனிப்பட்ட யூனிட்",
-      common_area: "பொது பகுதி",
-      mixed: "யூனிட் மற்றும் பொது பகுதி",
-      uncertain: "தெளிவில்லை"
-    }
-  };
-
-  return map[lang][intent];
-}
-
-/* ================= MALAYSIAN AI NORMALISER ================= */
-async function aiCleanDescription(text: string): Promise<string> {
-  if (!openai) return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a Malaysian property maintenance assistant.
-
-Rewrite the issue into ONE short, clear maintenance sentence in English.
-
-Rules:
-- Remove filler words (lah, lor, leh, ah, eh).
-- Translate Malaysian slang / rojak into standard English.
-- Translate Malay / Chinese / Tamil words if present.
-- Keep ONLY the asset + problem + location if mentioned.
-- No emojis. No apologies. No extra words.
-- Do NOT guess causes. Do NOT add solutions.
-`
-        },
-        { role: "user", content: text }
-      ]
-    });
-
-    return r.choices[0]?.message?.content?.trim() || text;
-  } catch {
-    return text;
-  }
-}
-
-/* ================= TRANSCRIPT CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
-
-  let t = text.toLowerCase();
-
-  t = t.replace(
-    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
-    ""
+/* ================= ⭐PER PHONE EXECUTIION LOCK ================= */
+async function withPhoneLock<T>(
+  supabase: any,
+  phone: string,
+  fn: () => Promise<T>
+): Promise<T | null> {
+  const { data: locked } = await supabase.rpc(
+    "pg_try_advisory_lock",
+    { key: phone }
   );
 
-  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-  t = t.replace(/\s+/g, " ").trim();
-
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-/* ================= VOICE TRANSCRIPTION ================= */
-async function transcribeVoice(mediaUrl: string): Promise<string | null> {
-  if (!openai) return null;
+  if (!locked) return null;
 
   try {
-    const auth = Buffer.from(
-      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-    ).toString("base64");
-
-    const res = await fetch(mediaUrl, {
-      headers: { Authorization: `Basic ${auth}` }
-    });
-
-    if (!res.ok) return null;
-
-    const buffer = await res.arrayBuffer();
-
-    const file = await toFile(
-      Buffer.from(buffer),
-      "voice",
-      { type: res.headers.get("content-type") || "application/octet-stream" }
-    );
-
-    const transcript = await openai.audio.transcriptions.create({
-      file,
-      model: "whisper-1"
-    });
-
-    return transcript.text ?? null;
-  } catch {
-    return null;
+    return await fn();
+  } finally {
+    await supabase.rpc("pg_advisory_unlock", { key: phone });
   }
 }
 
-/* ================= MESSAGE NORMALIZER ================= */
-async function normalizeIncomingMessage(body: any): Promise<string> {
-  let text: string = body.description_raw || "";
 
-  if (!text && body.voice_url) {
-    const transcript = await transcribeVoice(body.voice_url);
-    if (transcript) text = transcript;
-  }
+/*==============================================================================1. 🧠 HANDLERS =================================================================================================*/
+/* ================= A. INTAKE HANDLER ================= */
+/* =====================================================
+   🧠 ROOT HANDLER (ENTRY POINT)
+   - NO BUSINESS LOGIC
+   - NO STATE ROUTING
+   - NO AI
+===================================================== */
 
-  if (!text && body.image_url) {
-    text = "Photo evidence provided. Issue description pending.";
-  }
-
-  return cleanTranscript(text);
-}
-/*====================================================*/
-/* ================= API HANDLER ================= */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -790,19 +53,54 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  try {
-    const body =
+  const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { condo_id, phone_number } = body;
+  const { condo_id, phone_number } = body;
 
-    const description_raw = await normalizeIncomingMessage(body);
+  if (!condo_id || !phone_number) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
 
-    if (!condo_id || !phone_number || !description_raw) {
-      return res.status(400).json({ error: "Missing required fields" });
+  // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE)
+  const result = await withPhoneLock(
+    supabase,
+    phone_number,
+    async () => {
+      return await coreHandler(req, res, body);
     }
+  );
 
-    /* ===== CONVERSATION STATE (EARLY ROUTER) ===== */
+  // If locked → silently ignore (bank behavior)
+  if (result === null) {
+    return res.status(200).json({ success: true });
+  }
+
+  return result;
+}
+
+/* =====================================================
+  🧠 CORE HANDLER
+   - Fetch session
+   - Recover session
+   - Decide: intake vs non-intake
+   - Route state ONCE
+===================================================== */
+async function coreHandler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  body: any
+) {
+  const { condo_id, phone_number } = body;
+
+      /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
+  const description_raw = await normalizeIncomingMessage(body);
+
+  if (!description_raw) {
+    return res.status(200).json({ success: true });
+  }
+
+    /* ===== 🧠 HANDLERS FETCH SESSION ===== */
   const { data: session } = await supabase
   .from("conversation_sessions")
   .select("id, state, current_ticket_id, language")
@@ -810,7 +108,7 @@ export default async function handler(
   .eq("phone_number", phone_number)
   .maybeSingle();
 
-    /* ================= FETCH LATEST OPEN TICKET ================= */
+    /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
   const { data: existingTicket } = await supabase
   .from("tickets")
   .select("id, status, language")
@@ -821,7 +119,7 @@ export default async function handler(
   .maybeSingle();
 
 
-/* ================= SESSION AUTO-RECOVERY (MANDATORY) ================= */
+/* ================= 🔴🧠 HANDLERS SESSION AUTO-RECOVERY (MANDATORY) ================= */
 let effectiveSession = session;
 
 if (!session && existingTicket) {
@@ -841,11 +139,38 @@ if (!session && existingTicket) {
   effectiveSession = recoveredSession;
 }
 
-/* ===== DERIVE CONVERSATION STATE (SINGLE SOURCE OF TRUTH) ===== */
 const conversationState =
   effectiveSession?.state ?? "intake";
+  
 
-/* ================= HARD MENU GUARD (DO NOT MOVE) ================= */
+/* =====================================================
+     🔁 SINGLE STATE ROUTE (NON-INTAKE)
+     - NO THROTTLE
+     - NO AI
+     - NO GUESSING
+  ===================================================== */
+
+  if (conversationState !== "intake") {
+    return routeByState(req, res, effectiveSession);
+  }
+
+  /* =====================================================
+     ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
+
+     MOVE YOUR CURRENT INTAKE CODE HERE, UNCHANGED:
+     - throttle
+     - greeting guards
+     - meaningful intent
+     - language lock
+     - resident verification
+     - intent detection
+     - ticket creation
+     - embedding + duplicate
+     - reply_text
+
+     ❗ DO NOT add state routing here
+  ===================================================== */
+/* ================= ❌HARD MENU GUARD (DO NOT MOVE) ================= */
 const menuText = description_raw.trim();
 const isMenuReply = ["1", "2", "3"].includes(menuText);
 
@@ -856,90 +181,17 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
       "⚠️ Sesi anda telah tamat. Sila hantar semula masalah penyelenggaraan."
   });
 }
-
-  // Force state routing — ignore text length, greeting, AI, throttle
-  if (conversationState !== "intake") {
-  switch (conversationState) {
-    case "awaiting_confirmation":
-      return handleConfirmation(req, res, effectiveSession);
-
-    case "edit_menu":
-      return handleEditMenu(req, res, effectiveSession);
-
-    case "edit_category":
-      return handleEditCategory(req, res, effectiveSession);
-
-    case "draft_edit":
-      // Menu replies are invalid inside draft edit
-      
-      const replyLang =
-  session?.language ??
-  (existingTicket?.language as "en" | "ms" | "zh" | "ta" | undefined) ??
-  detectLanguage(description_raw);
-
-
-return res.status(200).json({
-  success: true,
-  reply_text:
-    replyLang === "ms"
-      ? "Sila hantar keterangan isu, bukan pilihan menu."
-      : replyLang === "zh"
-      ? "请发送问题描述，而不是菜单选项。"
-      : replyLang === "ta"
-      ? "மெனு தேர்வை அல்ல, பிரச்சனை விளக்கத்தை அனுப்பவும்."
-      : "Please send the issue description, not a menu option."
-});
-
-    case "awaiting_payment":
-      return handlePayment(req, res, effectiveSession);
-
-    default:
-      // Absolute safety fallback
-      return res.status(200).json({
-        success: true,
-        reply_text:
-          "⚠️ Sila hantar semula masalah penyelenggaraan anda."
-      });
-  }
-}
     
-    /* ===== LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
+    /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
-  /* ============CHECK EXISTING CONVERSATION LANGUAGE================ */
+  /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
 
     if (existingTicket?.language) {
       lang = existingTicket.language;
     }
 
-    /* ============CONVERSATION STATE CHANNEL================ */
-    if (conversationState !== "intake") {
-  switch (conversationState) {
-    case "draft_edit":
-      return handleDraftEdit(req, res, session);
-
-  case "edit_menu":
-    return handleEditMenu(req, res, session);
-
-  case "edit_category":
-  return handleEditCategory(req, res, session);
-
-    case "awaiting_confirmation":
-      return handleConfirmation(req, res, session);
-
-    case "awaiting_payment":
-      return handlePayment(req, res, session);
-
-    case "closed":
-      return res.status(200).json({ success: true });
-
-    default:
-      // safety fallback
-      break;
-  }
-}
-
-    /* ===== ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
+    /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const throttle = await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
@@ -968,7 +220,7 @@ return res.status(200).json({
 if (
   !isMenuReply &&
   conversationState === "intake" &&
-  !session?.current_ticket_id &&
+  !effectiveSession?.current_ticket_id &&
   isGreetingOnly(description_raw)
 ) {
 
@@ -1002,7 +254,7 @@ return res.status(200).json({
 }
 }
     
-       /* ===== MEANINGFUL INTENT CHECK ===== */
+   /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
 if (conversationState === "intake" && !isMenuReply) {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
@@ -1016,7 +268,7 @@ if (conversationState === "intake" && !isMenuReply) {
   }
   }
 
-    /* ===== 🔒 LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
+    /* ===== 🔴 🧠LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
     lang = await aiDetectLanguage(description_raw);
 
         const description_clean = await aiCleanDescription(description_raw);
@@ -1027,7 +279,7 @@ const description_display =
     : await aiTranslateForDisplay(description_clean, lang);
 
 
-       /* ===== VERIFY RESIDENT ===== */
+       /* ===== 🧠 VERIFY RESIDENT ===== */
     const { data: resident } = await supabase
       .from("residents")
       .select("unit_id, approved")
@@ -1075,7 +327,7 @@ const description_display =
       }
     }
 
-    /* ===== CREATE TICKET ===== */
+    /* ===== 🧠 CREATE TICKET ===== */
     const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
@@ -1109,7 +361,7 @@ const description_display =
       updated_at: new Date()
       });
 
-    /* ===== EMBEDDING + DUPLICATE ===== */
+    /* ===== 🧠 EMBEDDING + DUPLICATE ===== */
     if (openai && description_clean) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
@@ -1167,23 +419,57 @@ const description_display =
   intent_category
 )
     });
-  } 
+  }
+
   catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
       detail: err.message
     });
-  }
 }
 
 
-
-
-
 /* =====================================================
-   FOLLOW-UP HANDLERS (NO AI / NO THROTTLE)
+   SINGLE STATE ROUTER (AUTHORITATIVE)
+   - ONE switch
+   - ONE exit
 ===================================================== */
+async function routeByState(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  switch (session.state) {
+
+    case "awaiting_confirmation":
+      return handleConfirmation(req, res, session);
+
+    case "edit_menu":
+      return handleEditMenu(req, res, session);
+
+    case "edit_category":
+      return handleEditCategory(req, res, session);
+
+    case "draft_edit":
+      return handleDraftEdit(req, res, session);
+
+    case "awaiting_payment":
+      return handlePayment(req, res, session);
+
+    case "closed":
+      return res.status(200).json({ success: true });
+
+    default:
+      return res.status(200).json({
+        success: true,
+        reply_text:
+          "⚠️ Please send your maintenance issue again."
+      });
+  }
+}
+
+/*=========🧠HANDLER FOR ROUTER=============*/
 
 async function handleConfirmation(
   req: NextApiRequest,
@@ -1570,4 +856,779 @@ async function handlePayment(
     reply_text: buildFollowUpReply(lang, "invalid_payment")
   });
 }
+
+/*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
+
+/* ================= 🔴✅ HELPER ABUSE / SPAM THROTTLING ================= */
+const THROTTLE_WINDOW_SECONDS = 60;
+const THROTTLE_SOFT_LIMIT = 5;
+const THROTTLE_HARD_LIMIT = 8;
+const THROTTLE_BLOCK_MINUTES = 5;
+
+async function checkThrottle(
+  condo_id: string,
+  phone_number: string
+): Promise<{
+  allowed: boolean;
+  level: "ok" | "soft" | "blocked";
+  count: number;
+}> {
+  const now = new Date();
+
+  const { data, error } = await supabase
+    .from("message_throttle")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  // Fail open
+  if (error) {
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  // First message
+  if (!data) {
+    await supabase.from("message_throttle").insert({
+      condo_id,
+      phone_number,
+      message_count: 1,
+      blocked_until: null,
+      updated_at: now
+    });
+
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  // Hard blocked
+  if (data.blocked_until && new Date(data.blocked_until) > now) {
+    return {
+      allowed: false,
+      level: "blocked",
+      count: data.message_count
+    };
+  }
+
+  const windowStart = new Date(data.first_seen_at);
+  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
+
+  // Window expired → reset
+  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: 1,
+        first_seen_at: now,
+        blocked_until: null,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  const newCount = data.message_count + 1;
+
+  // Hard limit
+  if (newCount > THROTTLE_HARD_LIMIT) {
+    const blockedUntil = new Date(
+      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
+    );
+
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: newCount,
+        blocked_until: blockedUntil,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return {
+      allowed: false,
+      level: "blocked",
+      count: newCount
+    };
+  }
+
+  // Soft / normal
+  await supabase
+    .from("message_throttle")
+    .update({
+      message_count: newCount,
+      updated_at: now
+    })
+    .eq("id", data.id);
+
+  return {
+    allowed: true,
+    level: newCount > THROTTLE_SOFT_LIMIT ? "soft" : "ok",
+    count: newCount
+  };
+}
+
+/* =================✅ HELPER THROTTLE NOTICE ================= */
+function buildThrottleNotice(
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  switch (lang) {
+    case "ms":
+      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
+    case "zh":
+      return "您发送消息过于频繁。请稍等片刻后再发送。";
+    case "ta":
+      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
+    default:
+      return "You are sending messages too quickly. Please wait a moment before sending another message.";
+  }
+}
+
+/* ================= ✅ HELPERKEYWORDS MATCH ================= */
+const COMMON_AREA_KEYWORDS = [
+  "lobby","lift","elevator","parking","corridor","staircase",
+  "garbage","trash","bin room","pool","gym",
+  "lif","lobi","koridor","tangga","tempat letak kereta",
+  "rumah sampah","tong sampah",
+  "电梯","走廊","停车场","垃圾房","泳池",
+  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
+];
+
+const OWN_UNIT_KEYWORDS = [
+  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
+  "master toilet","house bathroom","house lamp","room lamp",
+  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
+  "bilik air rumah","lampu rumah","lampu bilik",
+  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
+  "அறை","சமையலறை"
+];
+
+const AMBIGUOUS_KEYWORDS = [
+  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
+  "厕所","空调","கழிப்பிடம்","चिराग","灯"
+];
+
+/* ===== ✅ HELPER GREETING GUARD 1/ NO-INTENT KEYWORDS ===== */
+const GREETING_KEYWORDS = [
+  "hi","hello","hey","morning","afternoon","evening",
+  "good morning","good afternoon","good evening",
+  "thanks","thank you","tq","ok","okay","noted",
+  "test","testing","yo","boss","bro","sis",
+
+  // Malay
+  "hai","helo","selamat pagi","selamat petang","selamat malam",
+  "terima kasih","okey",
+
+  // Chinese
+  "你好","早安","晚安","谢谢",
+
+  // Tamil
+  "வணக்கம்","நன்றி"
+];
+
+function keywordMatch(text: string, keywords: string[]) {
+  const t = text.toLowerCase();
+  return keywords.some(k => t.includes(k.toLowerCase()));
+}
+
+/* ===== ✅ HELPER GREETING GUARD 2 ===== */
+function isGreetingOnly(text: string): boolean {
+  const t = text.toLowerCase().trim();
+
+  // Very short messages are almost always noise
+  if (t.length <= 6) return true;
+
+  // Pure greeting
+  return GREETING_KEYWORDS.some(
+    k => t === k || t.startsWith(k + " ")
+  );
+}
+
+
+/*=====================2. ✅ HELPER AI==========================*/
+
+/* ===== 🔴✅ HELPER GREETING GUARD 3/ AI MEANINGFUL ISSUE CHECK (BANK-GRADE) ===== */
+async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
+  if (!openai) return true; // fail-open
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a property maintenance gatekeeper for a condominium management system.
+
+Your task:
+Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
+
+Reply ONLY in JSON:
+{"is_issue": true|false}
+
+ACCEPT (return true) if the issue involves:
+- Building-attached or unit-attached assets
+- Fixtures that are part of the property or permanently installed
+
+Examples that MUST be accepted:
+- Water leaks, pipes, toilets, sinks, drains
+- Electrical wiring, switches, wall sockets
+- Ceiling fans
+- Air conditioners (AC, aircond)
+- Built-in lights or lamps
+- Doors, windows, sliding doors
+- Walls, ceilings, floors
+- Lift, corridor, lobby, parking, staircase
+- Any structural, plumbing, electrical, or mechanical issue related to the condo or unit
+
+REJECT (return false) if the issue involves:
+- Personal lifestyle or movable appliances
+- Items that are NOT permanently attached to the building
+
+Examples that MUST be rejected:
+- Television (TV)
+- Washing machine
+- Refrigerator
+- Microwave
+- Rice cooker
+- Laptop, phone, router
+- Furniture (sofa, table, bed)
+- Personal electronics or gadgets
+
+IMPORTANT RULES:
+- Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
+- If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
+- Greetings, chit-chat, testing messages, or unclear complaints → return false
+- Do NOT guess. If unsure but sounds like property maintenance → return true
+`
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+    return obj.is_issue === true;
+  } catch {
+    return true;
+  }
+}
+
+/* ================= ✅ HELPER AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
+async function aiTranslateForDisplay(
+  text: string,
+  targetLang: "en" | "ms" | "zh" | "ta"
+): Promise<string> {
+  if (!openai || targetLang === "en") return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the text into the target language. " +
+            "Keep it short, natural, and suitable for WhatsApp display. " +
+            "Do NOT add explanations. Reply ONLY the translated text."
+        },
+        {
+          role: "user",
+          content: `Target language: ${targetLang}\nText: ${text}`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text; // fail-safe
+  }
+}
+
+/* ================= ✅ HELPER AI LANGUAGE DETECTOR ================= */
+async function aiDetectLanguage(
+  text: string
+): Promise<"en" | "ms" | "zh" | "ta"> {
+  if (!openai) return "en";
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Detect the primary language of the message. " +
+            "Reply ONLY JSON: {\"lang\": \"en\"|\"ms\"|\"zh\"|\"ta\"}. " +
+            "Malay = ms. Ignore greetings."
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    if (["en", "ms", "zh", "ta"].includes(obj.lang)) {
+      return obj.lang;
+    }
+
+    return "en";
+  } catch {
+    return "en";
+  }
+}
+
+/* ================= ✅ HELPER AI CLASSIFIER ================= */
+async function aiClassify(text: string): Promise<{
+  category: "unit" | "common_area" | "mixed" | "uncertain";
+  confidence: number;
+}> {
+  if (!openai) return { category: "uncertain", confidence: 0 };
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    return {
+      category: obj.category ?? "uncertain",
+      confidence: Number(obj.confidence ?? 0)
+    };
+  } catch {
+    return { category: "uncertain", confidence: 0 };
+  }
+}
+
+/* ================= ✅ HELPER MALAYSIAN AI NORMALISER ================= */
+async function aiCleanDescription(text: string): Promise<string> {
+  if (!openai) return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a Malaysian property maintenance assistant.
+
+Rewrite the issue into ONE short, clear maintenance sentence in English.
+
+Rules:
+- Remove filler words (lah, lor, leh, ah, eh).
+- Translate Malaysian slang / rojak into standard English.
+- Translate Malay / Chinese / Tamil words if present.
+- Keep ONLY the asset + problem + location if mentioned.
+- No emojis. No apologies. No extra words.
+- Do NOT guess causes. Do NOT add solutions.
+`
+        },
+        { role: "user", content: text }
+      ]
+    });
+
+    return r.choices[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
+}
+
+/*=====================3. ✅ HELPER TEXT/MEDIA==========================*/
+
+/* ================= ✅ HELPER DETECT LANGUAGE ================= */
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+  const t = text.toLowerCase();
+
+  if (/[\u4e00-\u9fff]/.test(t)) return "zh"; // Chinese
+  if (/[\u0b80-\u0bff]/.test(t)) return "ta"; // Tamil
+
+  if (
+    t.includes("hai") ||
+    t.includes("selamat") ||
+    t.includes("terima kasih")
+  ) return "ms";
+
+  return "en";
+}
+
+/* ================= ✅ HELPER TRANSCRIPT CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+
+  let t = text.toLowerCase();
+
+  t = t.replace(
+    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
+    ""
+  );
+
+  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
+  t = t.replace(/\s+/g, " ").trim();
+
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= ✅ HELPER TRANSCRIPTION ================= */
+async function transcribeVoice(mediaUrl: string): Promise<string | null> {
+  if (!openai) return null;
+
+  try {
+    const auth = Buffer.from(
+      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+    ).toString("base64");
+
+    const res = await fetch(mediaUrl, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
+
+    if (!res.ok) return null;
+
+    const buffer = await res.arrayBuffer();
+
+    const file = await toFile(
+      Buffer.from(buffer),
+      "voice",
+      { type: res.headers.get("content-type") || "application/octet-stream" }
+    );
+
+    const transcript = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1"
+    });
+
+    return transcript.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ================= 🔴✅ HELPER MESSAGE NORMALIZER ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text: string = body.description_raw || "";
+
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  if (!text && body.image_url) {
+    text = "Photo evidence provided. Issue description pending.";
+  }
+
+  return cleanTranscript(text);
+}
+
+/*=============== ✅ HELPER FORMAT INTENT LABEL ========================*/
+function formatIntentLabel(
+  intent: "unit" | "common_area" | "mixed" | "uncertain",
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map = {
+    en: {
+      unit: "Unit",
+      common_area: "Common area",
+      mixed: "Unit & common area",
+      uncertain: "Uncertain"
+    },
+    ms: {
+      unit: "Unit kediaman",
+      common_area: "Kawasan bersama",
+      mixed: "Unit & kawasan bersama",
+      uncertain: "Tidak pasti"
+    },
+    zh: {
+      unit: "单位",
+      common_area: "公共区域",
+      mixed: "单位与公共区域",
+      uncertain: "不确定"
+    },
+    ta: {
+      unit: "தனிப்பட்ட யூனிட்",
+      common_area: "பொது பகுதி",
+      mixed: "யூனிட் மற்றும் பொது பகுதி",
+      uncertain: "தெளிவில்லை"
+    }
+  };
+
+  return map[lang][intent];
+}
+
+/*=====================4. ✅ HELPER REPLY BUILDER ==========================*/
+
+/* =================✅ HELPER BANK GRADE REPLY GENERATOR ================= */
+function buildReplyText(
+  lang: "en" | "ms" | "zh" | "ta",
+  type:
+  | "greeting"
+  | "greeting_soft"
+  | "greeting_firm"
+  | "intake_received"
+  | "confirmed"
+  | "non_maintenance",
+  ticketId?: string,
+  descriptionDisplay?: string,
+  intentCategory?: "unit" | "common_area" | "mixed" | "uncertain"
+): string {
+  if (type === "greeting") {
+    switch (lang) {
+      case "zh":
+        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
+      case "ta":
+        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
+      case "ms":
+        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
+      default:
+        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
+    }
+  }
+
+if (type === "greeting_soft") {
+  switch (lang) {
+    case "ms":
+      return "Sekadar peringatan kecil 🙂\nSila terangkan masalah penyelenggaraan supaya kami boleh buka tiket untuk anda.";
+    case "zh":
+      return "小提醒一下 🙂\n请描述维修问题，以便我们为您创建工单。";
+    case "ta":
+      return "ஒரு சிறிய நினைவூட்டல் 🙂\nடிக்கெட் உருவாக்க, தயவுசெய்து பராமரிப்பு பிரச்சனையை விவரிக்கவும்.";
+    default:
+      return "Just a quick reminder 🙂\nPlease describe the maintenance issue so we can create a ticket for you.";
+  }
+}
+
+if (type === "greeting_firm") {
+  switch (lang) {
+    case "ms":
+      return "Untuk meneruskan, kami perlukan penerangan ringkas mengenai masalah penyelenggaraan.\nSelepas itu, kami akan uruskan selebihnya.";
+    case "zh":
+      return "要继续处理，我们需要您简要说明维修问题。\n收到后，我们将为您安排后续。";
+    case "ta":
+      return "தொடர, தயவுசெய்து பராமரிப்பு பிரச்சனையை சுருக்கமாக விளக்கவும்.\nமீதியைக் kami uruskan.";
+    default:
+      return "To proceed, we’ll need a brief description of the maintenance issue.\nOnce received, we’ll take care of the rest.";
+  }
+}
+
+if (type === "intake_received") {
+  const intentLabel = intentCategory
+  ? formatIntentLabel(intentCategory, lang)
+  : null;
+
+  const issue = descriptionDisplay
+    ? `"${descriptionDisplay}"`
+    : "";
+
+  switch (lang) {
+    case "zh":
+      return `🛠 维修工单已记录。
+我们理解您的问题是关于 ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
+
+请回复：
+1️⃣ 确认工单
+2️⃣ 编辑描述
+3️⃣ 取消工单`;
+
+    case "ta":
+      return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
+உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
+
+${intentLabel ? `வகை: ${intentLabel}\n` : ""}
+
+பதில்:
+1️⃣ டிக்கெட்டை உறுதி செய்ய
+2️⃣ விளக்கத்தை திருத்த
+3️⃣ டிக்கெட்டை ரத்து செய்ய`;
+
+    case "ms":
+      return `🛠 Laporan penyelenggaraan telah direkodkan.
+Kami memahami bahawa isu anda berkaitan ${issue}
+
+${intentLabel ? `Kategori: ${intentLabel}\n` : ""}
+
+Sila balas:
+1️⃣ Sahkan tiket
+2️⃣ Edit keterangan
+3️⃣ Batalkan tiket`;
+
+    default:
+      return `🛠 Maintenance ticket recorded.
+We understand that your issue relates to ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
+
+Please reply:
+1️⃣ Confirm ticket
+2️⃣ Edit description
+3️⃣ Cancel ticket`;
+  }
+}
+
+  if (type === "non_maintenance") {
+  switch (lang) {
+    case "ms":
+      return (
+        "Terima kasih atas mesej anda 😊\n\n" +
+        "Kami mengesan bahawa mesej ini mungkin **bukan isu penyelenggaraan**.\n\n" +
+        "Contoh isu yang boleh dilaporkan:\n" +
+        "• Paip bocor\n" +
+        "• Lif rosak\n" +
+        "• Lampu tidak menyala\n\n" +
+        "Sila hantar masalah penyelenggaraan berkaitan unit atau kawasan bersama. Terima kasih!"
+      );
+
+    case "zh":
+      return (
+        "谢谢您的信息 😊\n\n" +
+        "我们发现这条信息**可能不是维修相关问题**。\n\n" +
+        "可提交的维修示例：\n" +
+        "• 水管漏水\n" +
+        "• 电梯故障\n" +
+        "• 灯不亮\n\n" +
+        "请重新发送与房屋或公共区域维修相关的问题。谢谢！"
+      );
+
+    case "ta":
+      return (
+        "உங்கள் செய்திக்கு நன்றி 😊\n\n" +
+        "இது **பராமரிப்பு சம்பந்தமான பிரச்சனை அல்ல** என்று தோன்றுகிறது.\n\n" +
+        "உதாரணமாக அனுப்பக்கூடிய பிரச்சனைகள்:\n" +
+        "• குழாய் கசிவு\n" +
+        "• லிப்ட் பழுது\n" +
+        "• விளக்கு எரியவில்லை\n\n" +
+        "தயவுசெய்து பராமரிப்பு தொடர்பான பிரச்சனையை அனுப்பவும். நன்றி!"
+      );
+
+    default:
+      return (
+        "Thanks for your message 😊\n\n" +
+        "It looks like this may **not be a maintenance-related issue**.\n\n" +
+        "Examples of accepted issues:\n" +
+        "• Leaking pipe\n" +
+        "• Lift not working\n" +
+        "• Light not functioning\n\n" +
+        "Please send a maintenance issue related to your unit or common area. Thank you!"
+      );
+  }
+}
+
+  // confirmed
+  switch (lang) {
+    case "zh":
+      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
+    case "ta":
+      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
+    case "ms":
+      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
+    default:
+      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+}
+
+/* ================= ✅ HELPER FOLLOW-UP REPLY TEXT ================= */
+function buildFollowUpReply(
+  lang: "en" | "ms" | "zh" | "ta",
+  type:
+    | "confirm_success"
+    | "ask_edit"
+    | "cancelled"
+    | "payment_prompt"
+    | "invalid_confirm"
+    | "invalid_payment"
+): string {
+  switch (type) {
+    case "confirm_success":
+      switch (lang) {
+        case "ms":
+          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30\nBalas PAY untuk teruskan pembayaran.";
+        case "zh":
+          return "✅ 工单已确认。\n检查费用：RM30\n回复 PAY 以继续付款。";
+        case "ta":
+          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30\nபணம் செலுத்த PAY என பதிலளிக்கவும்.";
+        default:
+          return "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed.";
+      }
+
+    case "ask_edit":
+      switch (lang) {
+        case "ms":
+          return "✏️ Sila balas dengan penerangan isu yang dikemaskini.";
+        case "zh":
+          return "✏️ 请回复更新后的问题描述。";
+        case "ta":
+          return "✏️ தயவுசெய்து திருத்தப்பட்ட பிரச்சனை விளக்கத்தை அனுப்பவும்.";
+        default:
+          return "✏️ Please reply with the corrected issue description.";
+      }
+
+    case "cancelled":
+      switch (lang) {
+        case "ms":
+          return "❌ Tiket telah dibatalkan.";
+        case "zh":
+          return "❌ 工单已取消。";
+        case "ta":
+          return "❌ டிக்கெட் ரத்து செய்யப்பட்டது.";
+        default:
+          return "❌ Ticket cancelled.";
+      }
+
+    case "payment_prompt":
+      switch (lang) {
+        case "ms":
+          return "💳 Balas PAY untuk membuat pembayaran atau CANCEL untuk batalkan tiket.";
+        case "zh":
+          return "💳 回复 PAY 进行付款，或回复 CANCEL 取消工单。";
+        case "ta":
+          return "💳 பணம் செலுத்த PAY அல்லது ரத்து செய்ய CANCEL என பதிலளிக்கவும்.";
+        default:
+          return "💳 Reply PAY to proceed or CANCEL to cancel the ticket.";
+      }
+
+    case "invalid_confirm":
+      switch (lang) {
+        case "ms":
+          return "Sila balas dengan 1, 2 atau 3 sahaja.";
+        case "zh":
+          return "请仅回复 1、2 或 3。";
+        case "ta":
+          return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
+        default:
+          return "Please reply with 1, 2, or 3 only.";
+      }
+
+    case "invalid_payment":
+      switch (lang) {
+        case "ms":
+          return "Sila balas PAY atau CANCEL sahaja.";
+        case "zh":
+          return "请仅回复 PAY 或 CANCEL。";
+        case "ta":
+          return "PAY அல்லது CANCEL மட்டுமே பதிலளிக்கவும்.";
+        default:
+          return "Please reply PAY or CANCEL only.";
+      }
+  }
+}
+
+/*====================================================*/
 
