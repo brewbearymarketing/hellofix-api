@@ -56,18 +56,26 @@ export default async function handler(
   const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-  const { condo_id, phone_number } = body;
+  const { condo_id } = body;
+  const phone_number = normalizeWhatsappPhone(body.phone_number);
+
+  if (!condo_id || !phone_number) {
+  return res.status(400).json({ error: "Missing required fields" });
+  }
 
   if (!condo_id || !phone_number) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE)
-  const result = await withPhoneLock(
+   const result = await withPhoneLock(
     supabase,
-    phone_number,
+    phone_number, // already normalized
     async () => {
-      return await coreHandler(req, res, body);
+    return await coreHandler(req, res, {
+      ...body,
+      phone_number
+      });
     }
   );
 
@@ -92,7 +100,8 @@ async function coreHandler(
   body: any
 ) {
   try{
-  const { condo_id, phone_number } = body;
+  const condo_id = body.condo_id;
+  const phone_number = body.phone_number; // already normalized
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
@@ -1630,6 +1639,19 @@ function buildFollowUpReply(
       }
   }
 }
+
+/*===================== NORMALIZE PHONE ===============================*/
+function normalizeWhatsappPhone(input?: string | null): string | null {
+  if (!input) return null;
+
+  return input
+    .toString()
+    .trim()
+    .replace(/^whatsapp:/i, "") // remove "whatsapp:"
+    .replace(/\s+/g, "")        // remove spaces
+    .replace(/-/g, "");         // remove dashes
+}
+
 
 /*====================================================*/
 
