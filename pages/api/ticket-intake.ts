@@ -1488,7 +1488,7 @@ function cleanTranscript(text: string): string {
   );
 
   t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-  t = t.replace(/\s+/g, " ").();
+  t = t.replace(/\s+/g, " ");
 
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
@@ -1877,7 +1877,6 @@ function normalizeWhatsappPhone(input?: string | null): string | null {
 
   return input
     .toString()
-    .()
     .replace(/^whatsapp:/i, "") // remove "whatsapp:"
     .replace(/\s+/g, "")        // remove spaces
     .replace(/-/g, "");         // remove dashes
