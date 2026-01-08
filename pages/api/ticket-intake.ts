@@ -472,25 +472,25 @@ async function routeByState(
       return handleConfirmation(req, res, session, description_raw);
 
     case "edit_menu":
-      return handleEditMenu(req, res, session);
+      return handleEditMenu(req, res, session,description_raw);
 
     case "edit_category":
-      return handleEditCategory(req, res, session);
+      return handleEditCategory(req, res, session,description_raw);
 
     case "draft_edit":
-      return handleDraftEdit(req, res, session);
+      return handleDraftEdit(req, res, session,description_raw);
 
     case "awaiting_payment":
-      return handlePayment(req, res, session);
+      return handlePayment(req, res, session,description_raw);
 
     case "awaiting_category":
-      return handleCategorySelection(req, res, session);
+      return handleCategorySelection(req, res, session,description_raw);
 
     case "awaiting_schedule":
-      return handleScheduleSelection(req, res, session);
+      return handleScheduleSelection(req, res, session,description_raw);
 
     case "contractor_assignment":
-      return handleContractorAssignment(req, res, session);
+      return handleContractorAssignment(req, res, session,description_raw);
 
     case "closed":
       return res.status(200).json({ success: true });
