@@ -1346,7 +1346,8 @@ async function aiTranslateForDisplay(
       ]
     });
 
-    return r.choices[0]?.message?.content?.() || text;
+    return r.choices[0]?.message?.content || text;
+    
   } catch {
     return text; // fail-safe
   }
@@ -1451,7 +1452,7 @@ Rules:
       ]
     });
 
-    return r.choices[0]?.message?.content?.() || text;
+    return r.choices[0]?.message?.content || text;
   } catch {
     return text;
   }
