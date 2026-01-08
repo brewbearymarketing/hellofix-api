@@ -1237,7 +1237,7 @@ function keywordMatch(text: string, keywords: string[]) {
 
 /* ===== ✅ HELPER GREETING GUARD 2 ===== */
 function isGreetingOnly(text: string): boolean {
-  const t = text.toLowerCase().();
+  const t = normalizeText(text).toLowerCase();
 
   // Very short messages are almost always noise
   if (t.length <= 6) return true;
