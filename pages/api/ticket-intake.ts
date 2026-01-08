@@ -863,7 +863,7 @@ async function handlePayment(
   description_raw: string,
   session: any
 ) {
-  const text = normalizeText(description_raw);.toUpperCase();
+  const text = normalizeText(description_raw).toUpperCase();
   const ticketId = session.current_ticket_id;
   const lang = session.language ?? "en";
 
