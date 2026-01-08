@@ -103,21 +103,6 @@ async function coreHandler(
   const condo_id = body.condo_id;
   const phone_number = body.phone_number; // already normalized
 
- // 🆕 NEW — BLOCK NEW INTAKE IF EXISTING ACTIVE TICKET
-if (
-  conversationState === "intake" &&
-  effectiveSession?.state &&
-  ["draft_edit", "edit_menu", "edit_category", "awaiting_payment"].includes(
-    effectiveSession.state
-  )
-) {
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      "⚠️ You already have an ongoing ticket. Please cancel it before creating a new request."
-  });
-}
- 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
 
@@ -166,6 +151,21 @@ if (!session && existingTicket) {
 
 const conversationState =
   effectiveSession?.state ?? "intake";
+    
+/* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
+if (
+  conversationState === "intake" &&
+  effectiveSession?.state &&
+  ["draft_edit", "edit_menu", "edit_category", "awaiting_payment"].includes(
+    effectiveSession.state
+  )
+) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      "⚠️ You already have an ongoing ticket. Please cancel it before creating a new request."
+  });
+}
   
 
 /* =====================================================
