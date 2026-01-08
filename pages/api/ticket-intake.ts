@@ -508,7 +508,8 @@ async function handleConfirmation(
       .from("conversation_sessions")
       .update({ state: "awaiting_payment" })
       .eq("condo_id", session.condo_id)
-      .eq("phone_number", session.phone_number);
+      .eq("phone_number", session.phone_number)
+      .eq("id", session.id);
 
 
     const paymentUrl =
@@ -535,6 +536,7 @@ if (text === "2") {
     .update({ state: "edit_menu" })
     .eq("condo_id", session.condo_id)
     .eq("phone_number", session.phone_number);
+    .eq("id", session.id);
 
   return res.status(200).json({
     success: true,
@@ -562,6 +564,7 @@ if (text === "3") {
       current_ticket_id: null
     })
     .eq("condo_id", session.condo_id)
+    .eq("id", session.id)
     .eq("phone_number", session.phone_number);
 
 
@@ -585,7 +588,8 @@ async function handleEditMenu(
       .from("conversation_sessions")
       .update({ state: "draft_edit" })
       .eq("condo_id", session.condo_id)
-      .eq("phone_number", session.phone_number);
+      .eq("phone_number", session.phone_number)
+      .eq("id", session.id);
 
 
     return res.status(200).json({
@@ -606,6 +610,7 @@ async function handleEditMenu(
       .from("conversation_sessions")
       .update({ state: "edit_category" })
       .eq("condo_id", session.condo_id)
+      .eq("id", session.id)
       .eq("phone_number", session.phone_number);
 
 
@@ -852,6 +857,7 @@ async function handlePayment(
         current_ticket_id: null
       })
       .eq("condo_id", session.condo_id)
+      .eq("id", session.id)
       .eq("phone_number", session.phone_number);
 
 
