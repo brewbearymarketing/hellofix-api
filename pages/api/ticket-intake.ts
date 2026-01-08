@@ -535,7 +535,7 @@ if (text === "2") {
     .from("conversation_sessions")
     .update({ state: "edit_menu" })
     .eq("condo_id", session.condo_id)
-    .eq("phone_number", session.phone_number);
+    .eq("phone_number", session.phone_number)
     .eq("id", session.id);
 
   return res.status(200).json({
