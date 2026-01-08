@@ -1053,53 +1053,6 @@ async function handleContractorAssignment(
   return res.status(200).json({ success: true });
 }
 
-
-// 🆕 NEW — HANDLE SCHEDULE SELECTION
-async function handleScheduleSelection(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  session: any
-) {
-  const text = req.body.description_raw?.trim();
-  const lang = session.language ?? "en";
-
-  if (!["1", "2", "3"].includes(text)) {
-    return res.status(200).json({
-      success: true,
-      reply_text:
-        lang === "ms"
-          ? "Sila pilih slot dengan membalas 1, 2 atau 3."
-          : "Please reply with 1, 2, or 3 to choose a slot."
-    });
-  }
-
-  const day = getNextWorkingDay();
-  const slots = buildSlots(day);
-  const chosen = slots[Number(text) - 1];
-
-  await supabase
-    .from("tickets")
-    .update({
-      preferred_slot_start: chosen.start,
-      preferred_slot_end: chosen.end,
-      updated_at: new Date()
-    })
-    .eq("id", session.current_ticket_id);
-
-  await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_payment" })
-    .eq("id", session.id);
-
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      lang === "ms"
-        ? "⏰ Slot dipilih. Sila teruskan pembayaran."
-        : "⏰ Time slot selected. Please proceed with payment."
-  });
-}
-
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
 
 /* ================= 🔴✅ HELPER ABUSE / SPAM THROTTLING ================= */
