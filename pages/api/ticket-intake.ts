@@ -176,11 +176,7 @@ if (
   ===================================================== */
 
   if (conversationState !== "intake") {
-    return routeByState(
-  { ...req, body: { ...req.body, description_raw } },
-  res,
-  effectiveSession
-  );
+  return routeByState(req, res, effectiveSession, description_raw);
   }
 
   /* =====================================================
@@ -467,12 +463,13 @@ const description_display =
 async function routeByState(
   req: NextApiRequest,
   res: NextApiResponse,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   switch (session.state) {
 
     case "awaiting_confirmation":
-      return handleConfirmation(req, res, session);
+      return handleConfirmation(req, res, session, description_raw);
 
     case "edit_menu":
       return handleEditMenu(req, res, session);
@@ -512,9 +509,10 @@ async function routeByState(
 async function handleConfirmation(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim();
+  const text = description_raw.trim();
   const lang = session.language ?? "en";
 
   if (!["1", "2", "3"].includes(text)) {
@@ -606,9 +604,10 @@ if (text === "3") {
 async function handleEditMenu(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim();
+  const text = description_raw.trim();
   const lang = session.language ?? "en";
 
   if (text === "1") {
@@ -671,6 +670,7 @@ async function handleEditMenu(
 async function handleDraftEdit(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
   const newText = req.body.description_raw?.trim();
@@ -778,9 +778,10 @@ Please reply:
 async function handleEditCategory(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim();
+  const text = description_raw.trim();
   const lang = session.language ?? "en";
 
   const map: Record<string, "unit" | "common_area" | "mixed"> = {
@@ -859,9 +860,10 @@ Reply:
 async function handlePayment(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim().toUpperCase();
+  const text = description_raw.trim().toUpperCase();
   const ticketId = session.current_ticket_id;
   const lang = session.language ?? "en";
 
@@ -905,9 +907,10 @@ async function handlePayment(
 async function handleCategorySelection(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim();
+  const text = description_raw.trim();
   const lang = session.language ?? "en";
 
   const map: Record<string, MaintenanceCategory> = {
@@ -972,9 +975,10 @@ async function handleCategorySelection(
 async function handleScheduleSelection(
   req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
-  const text = req.body.description_raw?.trim();
+  const text = description_raw.trim();
   const lang = session.language ?? "en";
 
   if (!["1", "2", "3"].includes(text)) {
@@ -1018,6 +1022,7 @@ async function handleScheduleSelection(
 async function handleContractorAssignment(
   _req: NextApiRequest,
   res: NextApiResponse,
+  description_raw: string,
   session: any
 ) {
   const ticketId = session.current_ticket_id;
