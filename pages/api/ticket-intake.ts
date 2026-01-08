@@ -176,7 +176,11 @@ if (
   ===================================================== */
 
   if (conversationState !== "intake") {
-    return routeByState(req, res, effectiveSession);
+    return routeByState(
+  { ...req, body: { ...req.body, description_raw } },
+  res,
+  effectiveSession
+  );
   }
 
   /* =====================================================
