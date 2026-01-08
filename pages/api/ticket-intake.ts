@@ -196,7 +196,7 @@ if (
      ❗ DO NOT add state routing here
   ===================================================== */
 /* ================= ❌HARD MENU GUARD (DO NOT MOVE) ================= */
-const menuText = description_raw.();
+const menuText = normalizeText(description_raw);
 const isMenuReply = ["1", "2", "3"].includes(menuText);
 
 if (isMenuReply && !effectiveSession?.current_ticket_id) {
