@@ -1662,7 +1662,7 @@ const CATEGORY_DIAGNOSIS_FEE: Record<MaintenanceCategory, number> = {
   parking: 0,
   common_facility: 0,
   others: 30
-};
+}
 
 
 /* =================✅ HELPER BANK GRADE REPLY GENERATOR ================= */
