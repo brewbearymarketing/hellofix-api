@@ -196,7 +196,7 @@ if (
      ❗ DO NOT add state routing here
   ===================================================== */
 /* ================= ❌HARD MENU GUARD (DO NOT MOVE) ================= */
-const menuText = description_raw.trim();
+const menuText = description_raw.();
 const isMenuReply = ["1", "2", "3"].includes(menuText);
 
 if (isMenuReply && !effectiveSession?.current_ticket_id) {
@@ -512,7 +512,7 @@ async function handleConfirmation(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim();
+  const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
   if (!["1", "2", "3"].includes(text)) {
@@ -607,7 +607,7 @@ async function handleEditMenu(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim();
+  const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
   if (text === "1") {
@@ -673,7 +673,7 @@ async function handleDraftEdit(
   description_raw: string,
   session: any
 ) {
-  const newText = req.body.description_raw?.trim();
+  const newText = req.body.description_raw?.();
   const lang = session.language ?? "en";
 
 if (!newText || newText.length < 10) {
@@ -781,7 +781,7 @@ async function handleEditCategory(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim();
+  const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
   const map: Record<string, "unit" | "common_area" | "mixed"> = {
@@ -863,7 +863,7 @@ async function handlePayment(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim().toUpperCase();
+  const text = normalizeText(description_raw);.toUpperCase();
   const ticketId = session.current_ticket_id;
   const lang = session.language ?? "en";
 
@@ -910,7 +910,7 @@ async function handleCategorySelection(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim();
+  const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
   const map: Record<string, MaintenanceCategory> = {
@@ -978,7 +978,7 @@ async function handleScheduleSelection(
   description_raw: string,
   session: any
 ) {
-  const text = description_raw.trim();
+  const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
   if (!["1", "2", "3"].includes(text)) {
@@ -1237,7 +1237,7 @@ function keywordMatch(text: string, keywords: string[]) {
 
 /* ===== ✅ HELPER GREETING GUARD 2 ===== */
 function isGreetingOnly(text: string): boolean {
-  const t = text.toLowerCase().trim();
+  const t = text.toLowerCase().();
 
   // Very short messages are almost always noise
   if (t.length <= 6) return true;
@@ -1346,7 +1346,7 @@ async function aiTranslateForDisplay(
       ]
     });
 
-    return r.choices[0]?.message?.content?.trim() || text;
+    return r.choices[0]?.message?.content?.() || text;
   } catch {
     return text; // fail-safe
   }
@@ -1451,7 +1451,7 @@ Rules:
       ]
     });
 
-    return r.choices[0]?.message?.content?.trim() || text;
+    return r.choices[0]?.message?.content?.() || text;
   } catch {
     return text;
   }
@@ -1487,7 +1487,7 @@ function cleanTranscript(text: string): string {
   );
 
   t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-  t = t.replace(/\s+/g, " ").trim();
+  t = t.replace(/\s+/g, " ").();
 
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
@@ -1876,7 +1876,7 @@ function normalizeWhatsappPhone(input?: string | null): string | null {
 
   return input
     .toString()
-    .trim()
+    .()
     .replace(/^whatsapp:/i, "") // remove "whatsapp:"
     .replace(/\s+/g, "")        // remove spaces
     .replace(/-/g, "");         // remove dashes
@@ -1947,6 +1947,13 @@ async function processRefund(ticketId: string) {
     })
     .eq("id", ticketId);
 }
+
+/* ================= ✅ HELPER once ================= */
+function normalizeText(input: unknown): string {
+  if (typeof input === "string") return input.();
+  return "";
+}
+
 
 /*====================================================*/
 
