@@ -103,6 +103,21 @@ async function coreHandler(
   const condo_id = body.condo_id;
   const phone_number = body.phone_number; // already normalized
 
+ // 🆕 NEW — BLOCK NEW INTAKE IF EXISTING ACTIVE TICKET
+if (
+  conversationState === "intake" &&
+  effectiveSession?.state &&
+  ["draft_edit", "edit_menu", "edit_category", "awaiting_payment"].includes(
+    effectiveSession.state
+  )
+) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      "⚠️ You already have an ongoing ticket. Please cancel it before creating a new request."
+  });
+}
+ 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
 
@@ -467,6 +482,15 @@ async function routeByState(
     case "awaiting_payment":
       return handlePayment(req, res, session);
 
+    case "awaiting_category":
+      return handleCategorySelection(req, res, session);
+
+    case "awaiting_schedule":
+      return handleScheduleSelection(req, res, session);
+
+    case "contractor_assignment":
+      return handleContractorAssignment(req, res, session);
+
     case "closed":
       return res.status(200).json({ success: true });
 
@@ -506,7 +530,7 @@ async function handleConfirmation(
 
     await supabase
       .from("conversation_sessions")
-      .update({ state: "awaiting_payment" })
+      .update({ state: "awaiting_category" }) // 🆕 NEW
       .eq("condo_id", session.condo_id)
       .eq("phone_number", session.phone_number)
       .eq("id", session.id);
@@ -871,6 +895,174 @@ async function handlePayment(
     success: true,
     reply_text: buildFollowUpReply(lang, "invalid_payment")
   });
+}
+
+// 🆕 NEW — HANDLE CATEGORY SELECTION
+async function handleCategorySelection(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
+
+  const map: Record<string, MaintenanceCategory> = {
+    "1": "electrical",
+    "2": "plumbing",
+    "3": "air_conditioning",
+    "4": "lighting",
+    "5": "sanitary",
+    "6": "door_window",
+    "7": "ceiling_wall",
+    "8": "flooring",
+    "9": "pest_control",
+    "10": "others"
+  };
+
+  const category = map[text];
+
+  if (!category) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila pilih kategori dengan membalas nombor sahaja."
+          : lang === "zh"
+          ? "请仅回复数字选择类别。"
+          : lang === "ta"
+          ? "எண் மூலம் வகையைத் தேர்வு செய்யவும்."
+          : "Please select a category by replying with a number only."
+    });
+  }
+
+  const diagnosis_fee = CATEGORY_DIAGNOSIS_FEE[category];
+
+  await supabase
+    .from("tickets")
+    .update({
+      maintenance_category: category,      // 🆕 NEW
+      diagnosis_fee,                       // 🆕 NEW
+      updated_at: new Date()
+    })
+    .eq("id", session.current_ticket_id);
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_schedule" }) // 🆕 NEW
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? `🛠 Kategori dipilih.\nYuran pemeriksaan: RM${diagnosis_fee}\n\nSila pilih slot masa:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        : lang === "zh"
+        ? `🛠 已选择类别。\n检查费：RM${diagnosis_fee}\n\n请选择时间段：\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        : lang === "ta"
+        ? `🛠 வகை தேர்ந்தெடுக்கப்பட்டது.\nசோதனை கட்டணம்: RM${diagnosis_fee}\n\nநேரத்தை தேர்வு செய்யவும்:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        : `🛠 Category selected.\nDiagnosis fee: RM${diagnosis_fee}\n\nPlease choose a time slot:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+  });
+}
+
+// 🆕 NEW — HANDLE SCHEDULE SELECTION
+async function handleScheduleSelection(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
+
+  if (!["1", "2", "3"].includes(text)) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila pilih slot dengan membalas 1, 2 atau 3."
+          : "Please reply with 1, 2, or 3 to choose a slot."
+    });
+  }
+
+  const day = getNextWorkingDay();
+  const slots = buildSlots(day);
+  const chosen = slots[Number(text) - 1];
+
+  await supabase
+    .from("tickets")
+    .update({
+      preferred_slot_start: chosen.start, // 🆕 NEW
+      preferred_slot_end: chosen.end,     // 🆕 NEW
+      updated_at: new Date()
+    })
+    .eq("id", session.current_ticket_id);
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_payment" }) // 🆕 NEW
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "⏰ Slot dipilih. Sila teruskan pembayaran."
+        : "⏰ Time slot selected. Please proceed with payment."
+  });
+}
+
+// 🆕 NEW — CONTRACTOR ASSIGNMENT
+async function handleContractorAssignment(
+  _req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const ticketId = session.current_ticket_id;
+
+  // 🆕 NEW — FETCH NEXT BEST CONTRACTOR (RPC OR QUERY)
+  const { data: contractor } = await supabase.rpc(
+    "pick_next_contractor",
+    { ticket_id: ticketId }
+  );
+
+  if (!contractor) {
+    // No contractor left
+    await supabase
+      .from("tickets")
+      .update({
+        assignment_status: "exhausted", // 🆕 NEW
+        refund_status: "pending",       // 🆕 NEW
+        status: "cancelled_system"
+      })
+      .eq("id", ticketId);
+
+    return res.status(200).json({ success: true });
+  }
+
+  await supabase
+    .from("tickets")
+    .update({
+      contractor_id: contractor.id,     // 🆕 NEW
+      assignment_status: "pending"       // 🆕 NEW
+    })
+    .eq("id", ticketId);
+
+  // 🆕 NEW — SLA TIMER (1 HOUR, WORKING HOURS ONLY)
+  setTimeout(async () => {
+    const { data: t } = await supabase
+      .from("tickets")
+      .select("assignment_status")
+      .eq("id", ticketId)
+      .single();
+
+    if (t?.assignment_status === "pending") {
+      await supabase
+        .from("tickets")
+        .update({ assignment_status: "rejected" })
+        .eq("id", ticketId);
+    }
+  }, 60 * 60 * 1000);
+
+  return res.status(200).json({ success: true });
 }
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
@@ -1389,6 +1581,41 @@ function formatIntentLabel(
 }
 
 /*=====================4. ✅ HELPER REPLY BUILDER ==========================*/
+/* ================= 🆕 MAINTENANCE CATEGORY CONSTANTS ================= */
+
+// 🆕 NEW — MAINTENANCE CATEGORY TYPES
+type MaintenanceCategory =
+  | "electrical"
+  | "plumbing"
+  | "air_conditioning"
+  | "lighting"
+  | "sanitary"
+  | "door_window"
+  | "ceiling_wall"
+  | "flooring"
+  | "pest_control"
+  | "lift"
+  | "parking"
+  | "common_facility"
+  | "others";
+
+// 🆕 NEW — CATEGORY → DIAGNOSIS FEE (RM)
+const CATEGORY_DIAGNOSIS_FEE: Record<MaintenanceCategory, number> = {
+  electrical: 30,
+  plumbing: 30,
+  air_conditioning: 40,
+  lighting: 30,
+  sanitary: 30,
+  door_window: 30,
+  ceiling_wall: 30,
+  flooring: 30,
+  pest_control: 50,
+  lift: 0,
+  parking: 0,
+  common_facility: 0,
+  others: 30
+};
+
 
 /* =================✅ HELPER BANK GRADE REPLY GENERATOR ================= */
 function buildReplyText(
@@ -1646,7 +1873,7 @@ function buildFollowUpReply(
   }
 }
 
-/*===================== NORMALIZE PHONE ===============================*/
+/*===================== ✅ HELPER NORMALIZE PHONE ===============================*/
 function normalizeWhatsappPhone(input?: string | null): string | null {
   if (!input) return null;
 
@@ -1656,6 +1883,72 @@ function normalizeWhatsappPhone(input?: string | null): string | null {
     .replace(/^whatsapp:/i, "") // remove "whatsapp:"
     .replace(/\s+/g, "")        // remove spaces
     .replace(/-/g, "");         // remove dashes
+}
+
+/*===================== ✅ HELPER WORKING DAY & SLOT ===============================*/
+// 🆕 NEW — PUBLIC HOLIDAYS (YYYY-MM-DD, extend as needed)
+const PUBLIC_HOLIDAYS = [
+  "2026-01-01",
+  "2026-02-01"
+];
+
+// 🆕 NEW
+function isSunday(date: Date) {
+  return date.getDay() === 0;
+}
+
+// 🆕 NEW
+function isPublicHoliday(date: Date) {
+  const ymd = date.toISOString().slice(0, 10);
+  return PUBLIC_HOLIDAYS.includes(ymd);
+}
+
+// 🆕 NEW — NEXT WORKING DAY (EXCLUDE SUNDAY & PH)
+function getNextWorkingDay(from = new Date()) {
+  const d = new Date(from);
+  d.setDate(d.getDate() + 1);
+
+  while (isSunday(d) || isPublicHoliday(d)) {
+    d.setDate(d.getDate() + 1);
+  }
+
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// 🆕 NEW — BUILD 3 FIXED SLOTS
+function buildSlots(date: Date) {
+  const base = new Date(date);
+
+  const s1 = new Date(base); s1.setHours(9, 0, 0, 0);
+  const e1 = new Date(base); e1.setHours(12, 0, 0, 0);
+
+  const s2 = new Date(base); s2.setHours(12, 0, 0, 0);
+  const e2 = new Date(base); e2.setHours(15, 0, 0, 0);
+
+  const s3 = new Date(base); s3.setHours(15, 0, 0, 0);
+  const e3 = new Date(base); e3.setHours(18, 0, 0, 0);
+
+  return [
+    { start: s1, end: e1 },
+    { start: s2, end: e2 },
+    { start: s3, end: e3 }
+  ];
+}
+
+/* ================= ✅ HELPER REFUND ================= */
+
+// 🆕 NEW
+async function processRefund(ticketId: string) {
+  await supabase
+    .from("tickets")
+    .update({
+      refund_status: "processed",
+      refunded_at: new Date(),
+      refund_reason: "NO_CONTRACTOR_AVAILABLE",
+      processed_by: "system"
+    })
+    .eq("id", ticketId);
 }
 
 
