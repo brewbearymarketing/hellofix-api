@@ -491,6 +491,9 @@ async function routeByState(
     case "contractor_assignment":
       return handleContractorAssignment(req, res, session);
 
+    case "awaiting_schedule":
+      return handleScheduleSelection(req, res, session);
+
     case "closed":
       return res.status(200).json({ success: true });
 
@@ -1017,20 +1020,27 @@ async function handleContractorAssignment(
   session: any
 ) {
   const ticketId = session.current_ticket_id;
+  
 
-  // 🆕 NEW — FETCH NEXT BEST CONTRACTOR (RPC OR QUERY)
+// 🆕 NEW — CONTRACTOR ASSIGNMENT (SYSTEM ONLY)
+async function handleContractorAssignment(
+  _req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const ticketId = session.current_ticket_id;
+
   const { data: contractor } = await supabase.rpc(
     "pick_next_contractor",
     { ticket_id: ticketId }
   );
 
   if (!contractor) {
-    // No contractor left
     await supabase
       .from("tickets")
       .update({
-        assignment_status: "exhausted", // 🆕 NEW
-        refund_status: "pending",       // 🆕 NEW
+        assignment_status: "exhausted",
+        refund_status: "pending",
         status: "cancelled_system"
       })
       .eq("id", ticketId);
@@ -1039,30 +1049,68 @@ async function handleContractorAssignment(
   }
 
   await supabase
+  // 🆕 NEW — PERSIST ASSIGNMENT SLA (BANK-GRADE)
+  const assignedAt = new Date();
+  const deadline = new Date(assignedAt.getTime() + 60 * 60 * 1000); // +1 hour
+
+  await supabase
     .from("tickets")
     .update({
-      contractor_id: contractor.id,     // 🆕 NEW
-      assignment_status: "pending"       // 🆕 NEW
-    })
-    .eq("id", ticketId);
-
-  // 🆕 NEW — SLA TIMER (1 HOUR, WORKING HOURS ONLY)
-  setTimeout(async () => {
-    const { data: t } = await supabase
-      .from("tickets")
-      .select("assignment_status")
-      .eq("id", ticketId)
-      .single();
-
-    if (t?.assignment_status === "pending") {
-      await supabase
-        .from("tickets")
-        .update({ assignment_status: "rejected" })
-        .eq("id", ticketId);
-    }
-  }, 60 * 60 * 1000);
+    contractor_id: contractor.id,
+    assignment_status: "pending",
+    assigned_at: assignedAt,                 // 🆕 NEW
+    assignment_deadline_at: deadline         // 🆕 NEW
+  })
+  .eq("id", ticketId);
 
   return res.status(200).json({ success: true });
+}
+
+
+// 🆕 NEW — HANDLE SCHEDULE SELECTION
+async function handleScheduleSelection(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any
+) {
+  const text = req.body.description_raw?.trim();
+  const lang = session.language ?? "en";
+
+  if (!["1", "2", "3"].includes(text)) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila pilih slot dengan membalas 1, 2 atau 3."
+          : "Please reply with 1, 2, or 3 to choose a slot."
+    });
+  }
+
+  const day = getNextWorkingDay();
+  const slots = buildSlots(day);
+  const chosen = slots[Number(text) - 1];
+
+  await supabase
+    .from("tickets")
+    .update({
+      preferred_slot_start: chosen.start,
+      preferred_slot_end: chosen.end,
+      updated_at: new Date()
+    })
+    .eq("id", session.current_ticket_id);
+
+  await supabase
+    .from("conversation_sessions")
+    .update({ state: "awaiting_payment" })
+    .eq("id", session.id);
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "⏰ Slot dipilih. Sila teruskan pembayaran."
+        : "⏰ Time slot selected. Please proceed with payment."
+  });
 }
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
@@ -1950,6 +1998,72 @@ async function processRefund(ticketId: string) {
     })
     .eq("id", ticketId);
 }
+
+/* ================= ✅ HELPERS WORKING DAY & SLOT  ================= */
+// 🆕 NEW — PUBLIC HOLIDAYS (YYYY-MM-DD)
+const PUBLIC_HOLIDAYS = [
+  "2026-01-01",
+  "2026-02-01"
+];
+
+// 🆕 NEW
+function isSunday(date: Date) {
+  return date.getDay() === 0;
+}
+
+// 🆕 NEW
+function isPublicHoliday(date: Date) {
+  const ymd = date.toISOString().slice(0, 10);
+  return PUBLIC_HOLIDAYS.includes(ymd);
+}
+
+// 🆕 NEW — NEXT WORKING DAY
+function getNextWorkingDay(from = new Date()) {
+  const d = new Date(from);
+  d.setDate(d.getDate() + 1);
+
+  while (isSunday(d) || isPublicHoliday(d)) {
+    d.setDate(d.getDate() + 1);
+  }
+
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// 🆕 NEW — 3 FIXED SLOTS (9–6)
+function buildSlots(date: Date) {
+  const base = new Date(date);
+
+  const s1 = new Date(base); s1.setHours(9, 0, 0, 0);
+  const e1 = new Date(base); e1.setHours(12, 0, 0, 0);
+
+  const s2 = new Date(base); s2.setHours(12, 0, 0, 0);
+  const e2 = new Date(base); e2.setHours(15, 0, 0, 0);
+
+  const s3 = new Date(base); s3.setHours(15, 0, 0, 0);
+  const e3 = new Date(base); e3.setHours(18, 0, 0, 0);
+
+  return [
+    { start: s1, end: e1 },
+    { start: s2, end: e2 },
+    { start: s3, end: e3 }
+  ];
+}
+
+/* ================= ✅ HELPERS REFUND ================= */
+
+async function processRefund(ticketId: string) {
+  await supabase
+    .from("tickets")
+    .update({
+      refund_status: "processed",
+      refunded_at: new Date(),
+      refund_reason: "NO_CONTRACTOR_AVAILABLE",
+      processed_by: "system"
+    })
+    .eq("id", ticketId);
+}
+
 
 
 /*====================================================*/
