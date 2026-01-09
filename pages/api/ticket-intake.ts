@@ -509,8 +509,8 @@ async function routeByState(
 async function handleConfirmation(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
@@ -604,8 +604,8 @@ if (text === "3") {
 async function handleEditMenu(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
@@ -670,8 +670,8 @@ async function handleEditMenu(
 async function handleDraftEdit(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const newText = req.body.description_raw?.();
   const lang = session.language ?? "en";
@@ -778,8 +778,8 @@ Please reply:
 async function handleEditCategory(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
@@ -860,8 +860,8 @@ Reply:
 async function handlePayment(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw).toUpperCase();
   const ticketId = session.current_ticket_id;
@@ -907,8 +907,8 @@ async function handlePayment(
 async function handleCategorySelection(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
@@ -975,8 +975,8 @@ async function handleCategorySelection(
 async function handleScheduleSelection(
   req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
