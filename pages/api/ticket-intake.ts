@@ -56,6 +56,9 @@ export default async function handler(
   const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
+   /* ================= ⭐IMMEDIATE ACK TO MAKE / WHATSAPP TO AVOID TIMEOUT ERROR ================= */ 
+  res.status(200).json({ success: true });
+
   /* ================= ⭐WHATSAPP MESSAGE IDEMPOTENCY ================= */
   const message_id =
   body.MessageSid ||                  // Twilio WhatsApp
