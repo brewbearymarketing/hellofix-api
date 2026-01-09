@@ -997,15 +997,7 @@ async function handleScheduleSelection(
     .update({ state: "awaiting_payment" }) // 🆕 NEW
     .eq("id", session.id);
 
-  const paymentUrl =
-  `https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}`;
-
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      lang === "ms"
-        ? "⏰ Slot dipilih. Sila teruskan pembayaran."
-        : "⏰ Time slot selected. Please proceed with payment."
+    const paymentUrl = 'https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}';
 
     return res.status(200).json({
     success: true,
@@ -1019,7 +1011,7 @@ async function handleScheduleSelection(
       : lang === "ta"
       ? `⏰ உங்கள் நேரம் தேர்ந்தெடுக்கப்பட்டுள்ளது.\n\n💳 அடுத்த கட்டத்திற்குச் செல்ல, சோதனை கட்டணம் செலுத்தப்பட வேண்டும் 😊\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பிறகு:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
       : `⏰ Your time slot has been selected.\n\n💳 To proceed, a diagnosis payment is required 😊\nPlease complete the payment using the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
-});
+    });
 }
 
 // 🆕 NEW — CONTRACTOR ASSIGNMENT (SYSTEM ONLY)
