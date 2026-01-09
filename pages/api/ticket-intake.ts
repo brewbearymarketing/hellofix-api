@@ -113,6 +113,7 @@ console.timeEnd("PHONE_LOCK");
 
   // If locked → silently ignore (bank behavior)
   if (result === null) {
+    console.timeEnd("TOTAL_REQUEST"); // ✅ ADD THIS LINE
     return res.status(200).json({ success: true });
   }
 
