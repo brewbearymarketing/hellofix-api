@@ -553,24 +553,6 @@ async function handleConfirmation(
       .from("conversation_sessions")
       .update({ state: "awaiting_category" }) // 🆕 NEW
       .eq("id", session.id);
-
-
-    const paymentUrl =
-  `https://hellofix-api.vercel.app/api/pay?ticket_id=${ticketId}`;
-
-    return res.status(200).json({
-    success: true,
-    reply_text:
-    buildFollowUpReply(lang, "confirm_success") +
-    "\n\n" +
-    (lang === "ms"
-      ? `💳 Pembayaran diperlukan\nSila buat pembayaran melalui pautan berikut:\n${paymentUrl}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
-      : lang === "zh"
-      ? `💳 需要付款\n请通过以下链接完成付款：\n${paymentUrl}\n\n付款确认后：\n• 将分配承包商\n• 您将收到 WhatsApp 通知`
-      : lang === "ta"
-      ? `💳 கட்டணம் தேவை\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பின்:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
-      : `💳 Payment required\nPlease complete payment via the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
-});
   }
 
 if (text === "2") {
@@ -1015,13 +997,29 @@ async function handleScheduleSelection(
     .update({ state: "awaiting_payment" }) // 🆕 NEW
     .eq("id", session.id);
 
+  const paymentUrl =
+  `https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}`;
+
   return res.status(200).json({
     success: true,
     reply_text:
       lang === "ms"
         ? "⏰ Slot dipilih. Sila teruskan pembayaran."
         : "⏰ Time slot selected. Please proceed with payment."
-  });
+
+    return res.status(200).json({
+    success: true,
+    reply_text:
+    buildFollowUpReply(lang, "confirm_success") +
+    "\n\n" +
+    (lang === "ms"
+      ? `⏰ Slot masa telah dipilih.\n\n💳 Bayaran pemeriksaan diperlukan untuk meneruskan 😊\nSila buat pembayaran melalui pautan berikut:\n${paymentUrl}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
+      : lang === "zh"
+      ? `⏰ 已为您选择维修时间段。\n\n💳 为了继续处理，需要先完成检查费用的付款 😊\n请通过以下链接进行付款：\n${paymentUrl}\n\n付款确认后：\n• 将分配承包商\n• 您将通过 WhatsApp 收到通知`
+      : lang === "ta"
+      ? `⏰ உங்கள் நேரம் தேர்ந்தெடுக்கப்பட்டுள்ளது.\n\n💳 அடுத்த கட்டத்திற்குச் செல்ல, சோதனை கட்டணம் செலுத்தப்பட வேண்டும் 😊\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பிறகு:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
+      : `⏰ Your time slot has been selected.\n\n💳 To proceed, a diagnosis payment is required 😊\nPlease complete the payment using the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
+});
 }
 
 // 🆕 NEW — CONTRACTOR ASSIGNMENT (SYSTEM ONLY)
