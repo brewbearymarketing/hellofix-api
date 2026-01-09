@@ -673,7 +673,7 @@ async function handleDraftEdit(
   session: any,
   description_raw: string
 ) {
-  const newText = req.body.description_raw?.();
+  const newText = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
 if (!newText || newText.length < 10) {
