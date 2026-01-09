@@ -15,22 +15,6 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
-/* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
-if (message_id) {
-  const { error } = await supabase
-    .from("processed_messages")
-    .insert({
-      condo_id,
-      phone_number,
-      message_id
-    });
-
-  // Duplicate → silently ignore
-  if (error) {
-    return res.status(200).json({ success: true });
-  }
-}
-
 /* ================= ⭐PER PHONE EXECUTIION LOCK ================= */
 async function withPhoneLock<T>(
   supabase: any,
@@ -83,12 +67,24 @@ export default async function handler(
   const phone_number = normalizeWhatsappPhone(body.phone_number);
 
   if (!condo_id || !phone_number) {
-  return res.status(400).json({ error: "Missing required fields" });
-  }
-
-  if (!condo_id || !phone_number) {
     return res.status(400).json({ error: "Missing required fields" });
   }
+
+  /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
+if (message_id) {
+  const { error } = await supabase
+    .from("processed_messages")
+    .insert({
+      condo_id,
+      phone_number,
+      message_id
+    });
+
+  // Duplicate → silently ignore
+  if (error) {
+    return res.status(200).json({ success: true });
+  }
+}
 
   // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE)
    const result = await withPhoneLock(
