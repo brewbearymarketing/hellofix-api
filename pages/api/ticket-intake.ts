@@ -72,6 +72,13 @@ export default async function handler(
   const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
+  /* ================= ⭐WHATSAPP MESSAGE IDEMPOTENCY ================= */
+  const message_id =
+  body.MessageSid ||                  // Twilio WhatsApp
+  body.message_id ||                  // custom
+  body.messages?.[0]?.id ||           // Meta Cloud API
+  null;
+
   const { condo_id } = body;
   const phone_number = normalizeWhatsappPhone(body.phone_number);
 
