@@ -533,8 +533,6 @@ async function handleConfirmation(
     await supabase
       .from("conversation_sessions")
       .update({ state: "awaiting_category" }) // 🆕 NEW
-      .eq("condo_id", session.condo_id)
-      .eq("phone_number", session.phone_number)
       .eq("id", session.id);
 
 
@@ -560,8 +558,6 @@ if (text === "2") {
   await supabase
     .from("conversation_sessions")
     .update({ state: "edit_menu" })
-    .eq("condo_id", session.condo_id)
-    .eq("phone_number", session.phone_number)
     .eq("id", session.id);
 
   return res.status(200).json({
@@ -589,9 +585,7 @@ if (text === "3") {
       state: "intake",
       current_ticket_id: null
     })
-    .eq("condo_id", session.condo_id)
-    .eq("id", session.id)
-    .eq("phone_number", session.phone_number);
+    .eq("id", session.id);
 
 
   return res.status(200).json({
@@ -614,8 +608,6 @@ async function handleEditMenu(
     await supabase
       .from("conversation_sessions")
       .update({ state: "draft_edit" })
-      .eq("condo_id", session.condo_id)
-      .eq("phone_number", session.phone_number)
       .eq("id", session.id);
 
 
@@ -718,8 +710,7 @@ if (!newText || newText.length < 10) {
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" })
-    .eq("condo_id", session.condo_id)
-    .eq("phone_number", session.phone_number);
+    .eq("id", session.id);
 
 
 return res.status(200).json({
@@ -817,9 +808,7 @@ async function handleEditCategory(
 
   await supabase
     .from("conversation_sessions")
-    .update({ state: "awaiting_confirmation" })
-    .eq("condo_id", session.condo_id)
-    .eq("phone_number", session.phone_number);
+    .update({ state: "awaiting_confirmation" });
 
 
   const label = formatIntentLabel(selected, lang);
@@ -886,9 +875,7 @@ async function handlePayment(
         state: "intake",
         current_ticket_id: null
       })
-      .eq("condo_id", session.condo_id)
-      .eq("id", session.id)
-      .eq("phone_number", session.phone_number);
+      .eq("id", session.id);
 
 
     return res.status(200).json({
