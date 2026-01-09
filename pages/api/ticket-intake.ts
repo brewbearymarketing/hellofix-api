@@ -53,7 +53,6 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  console.time("TOTAL_REQUEST");
   if (req.method !== "POST") {
     return res.status(200).end();
   }
@@ -92,32 +91,22 @@ if (message_id) {
 }
 
   // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE)
-console.time("PHONE_LOCK");
-
-const result = await withPhoneLock(
-  supabase,
-  phone_number,
-  async () => {
-    console.time("CORE_HANDLER");
-    const r = await coreHandler(req, res, {
+   const result = await withPhoneLock(
+    supabase,
+    phone_number, // already normalized
+    async () => {
+    return await coreHandler(req, res, {
       ...body,
       phone_number
-    });
-    console.timeEnd("CORE_HANDLER");
-    return r;
-  }
-);
-
-console.timeEnd("PHONE_LOCK");
-
+      });
+    }
+  );
 
   // If locked → silently ignore (bank behavior)
   if (result === null) {
-    console.timeEnd("TOTAL_REQUEST"); // ✅ ADD THIS LINE
     return res.status(200).json({ success: true });
   }
-
-  console.timeEnd("TOTAL_REQUEST");
+  
   return result;
 }
 
