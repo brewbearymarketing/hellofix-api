@@ -15,6 +15,10 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
+/* ================= ⭐RUNTIME MODE ================= */
+const IS_WEBHOOK = true;
+
+
 /* ================= ⭐PER PHONE EXECUTIION LOCK ================= */
 async function withPhoneLock<T>(
   supabase: any,
@@ -55,9 +59,6 @@ export default async function handler(
 
   const body =
     typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-
-   /* ================= ⭐IMMEDIATE ACK TO MAKE / WHATSAPP TO AVOID TIMEOUT ERROR ================= */ 
-  res.status(200).json({ success: true });
 
   /* ================= ⭐WHATSAPP MESSAGE IDEMPOTENCY ================= */
   const message_id =
@@ -409,7 +410,7 @@ const description_display =
       });
 
     /* ===== 🧠 EMBEDDING + DUPLICATE ===== */
-    if (openai && description_clean) {
+    if (!IS_WEBHOOK && openai && description_clean) {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: description_clean
@@ -1024,6 +1025,12 @@ async function handleContractorAssignment(
   description_raw: string,
   session: any
 ) {
+
+  if (IS_WEBHOOK) {
+    // 🚀 Defer contractor assignment to cron / webhook / manual trigger
+    return res.status(200).json({ success: true });
+  }
+  
   const ticketId = session.current_ticket_id;
 
   const { data: contractor } = await supabase.rpc(
