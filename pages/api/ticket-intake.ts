@@ -1950,8 +1950,8 @@ async function processRefund(ticketId: string) {
 
 /* ================= ✅ HELPER once ================= */
 function normalizeText(input: unknown): string {
-  if (typeof input === "string") return input;
-  return "";
+  if (typeof input !== "string") return "";
+  return input.trim();
 }
 
 
