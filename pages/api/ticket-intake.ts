@@ -15,6 +15,22 @@ const openai = process.env.OPENAI_API_KEY
 
 console.log("OPENAI ENABLED:", !!openai);
 
+/* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
+if (message_id) {
+  const { error } = await supabase
+    .from("processed_messages")
+    .insert({
+      condo_id,
+      phone_number,
+      message_id
+    });
+
+  // Duplicate → silently ignore
+  if (error) {
+    return res.status(200).json({ success: true });
+  }
+}
+
 /* ================= ⭐PER PHONE EXECUTIION LOCK ================= */
 async function withPhoneLock<T>(
   supabase: any,
