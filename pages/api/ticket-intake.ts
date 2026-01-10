@@ -95,7 +95,7 @@ return res.status(200).json({ success: true });
    - Decide: intake vs non-intake
    - Route state ONCE
 ===================================================== */
-async function coreHandler(
+export async function coreHandler(
   req: NextApiRequest,
   res: NextApiResponse,
   body: any
