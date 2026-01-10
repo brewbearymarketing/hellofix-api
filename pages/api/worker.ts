@@ -17,7 +17,7 @@ export default async function worker(
     .select("*")
     .eq("status", "pending")
     .order("created_at", { ascending: true })
-    .limit(1)
+    .limit(3)
     .maybeSingle();
 
   // Nothing to process
