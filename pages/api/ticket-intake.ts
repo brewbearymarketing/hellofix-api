@@ -81,7 +81,8 @@ if (message_id) {
 await supabase.from("job_queue").insert({
   condo_id,
   phone_number,
-  payload: body
+  payload: body,
+  status: "pending"
 });
 
 return res.status(200).json({ success: true });
