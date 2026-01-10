@@ -1,8 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 
-// IMPORTANT: coreHandler is NOT a named export in v11
-// So we import default
+// IMPORTANT: coreHandler is default export in v11
 import coreHandler from "./ticket-intake";
 
 import { withPhoneLock } from "@/lib/withPhoneLock";
@@ -18,13 +17,14 @@ const supabase = createClient(
    - Triggered by Vercel Cron
    - Processes ONE job at a time
    - Serialised per phone_number
+   - CAPTURES reply_text for WhatsApp
 ===================================================== */
 export default async function worker(
   _req: NextApiRequest,
   res: NextApiResponse
 ) {
   /* ================= 1️⃣ FETCH ONE PENDING JOB ================= */
-  const { data: job, error } = await supabase
+  const { data: job } = await supabase
     .from("job_queue")
     .select("*")
     .eq("status", "pending")
@@ -32,8 +32,7 @@ export default async function worker(
     .limit(1)
     .maybeSingle();
 
-  if (error || !job) {
-    // Nothing to do
+  if (!job) {
     return res.status(200).json({ ok: true, empty: true });
   }
 
@@ -43,10 +42,15 @@ export default async function worker(
     .update({ status: "processing" })
     .eq("id", job.id);
 
-  /* ================= 3️⃣ FAKE RESPONSE (worker-safe) ================= */
+  let replyPayload: any = null;
+
+  /* ================= 3️⃣ FAKE RESPONSE (CAPTURE JSON) ================= */
   const fakeRes = {
     status: () => ({
-      json: () => null
+      json: (payload: any) => {
+        replyPayload = payload;
+        return payload;
+      }
     })
   } as any;
 
@@ -57,14 +61,23 @@ export default async function worker(
       job.phone_number,
       async () => {
         await coreHandler(
-          {} as any,   // req is not used inside coreHandler
+          {} as any, // req unused
           fakeRes,
           job.payload
         );
       }
     );
 
-    /* ================= 5️⃣ MARK DONE ================= */
+    /* ================= 5️⃣ SAVE WHATSAPP REPLY ================= */
+    if (replyPayload?.reply_text) {
+      await supabase.from("outgoing_messages").insert({
+        condo_id: job.condo_id,
+        phone_number: job.phone_number,
+        reply_text: replyPayload.reply_text
+      });
+    }
+
+    /* ================= 6️⃣ MARK DONE ================= */
     await supabase
       .from("job_queue")
       .update({ status: "done" })
@@ -73,7 +86,7 @@ export default async function worker(
   } catch (err: any) {
     console.error("🔥 WORKER ERROR:", err);
 
-    /* ================= 6️⃣ MARK FAILED ================= */
+    /* ================= 7️⃣ MARK FAILED ================= */
     await supabase
       .from("job_queue")
       .update({
