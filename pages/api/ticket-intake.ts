@@ -76,14 +76,6 @@ if (message_id) {
 
   
     // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
-await supabase.from("job_queue").insert({
-  condo_id,
-  phone_number,
-  payload: body,
-  status: "pending"
-});
-
-return res.status(200).json({ success: true });
 
 }
 
