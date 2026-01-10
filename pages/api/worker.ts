@@ -54,3 +54,4 @@ const { data: job } = await supabase
 
   return res.status(200).json({ ok: true });
 }
+
