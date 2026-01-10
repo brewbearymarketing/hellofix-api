@@ -31,7 +31,7 @@ export default async function worker(
     .eq("id", job.id);
 
       // 3️⃣ RUN YOUR EXISTING LOGIC (SERIALIZED PER PHONE)
-await withPhoneLock(supabase, job.phone_number, async () => {
+await withPhoneLock(supabase, job.phone_number!, async () => {
   await coreHandler(
     {} as any,
     { status: () => ({ json: () => null }) } as any,
