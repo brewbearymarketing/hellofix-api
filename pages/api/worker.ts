@@ -12,13 +12,14 @@ export default async function worker(
   res: NextApiResponse
 ) {
   // 1️⃣ Fetch ONE pending job
-  const { data: job } = await supabase
-    .from("job_queue")
-    .select("*")
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+const { data: job } = await supabase
+  .from("job_queue")
+  .update({ status: "processing" })
+  .eq("status", "pending")
+  .order("created_at", { ascending: true })
+  .limit(1)
+  .select()
+  .maybeSingle();
 
   if (!job) {
     return res.status(200).json({ ok: true, empty: true });
