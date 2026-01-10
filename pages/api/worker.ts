@@ -30,15 +30,6 @@ export default async function worker(
     .update({ status: "processing" })
     .eq("id", job.id);
 
-      // 3️⃣ RUN YOUR EXISTING LOGIC (SERIALIZED PER PHONE)
-await withPhoneLock(supabase, job.phone_number!, async () => {
-  await coreHandler(
-    {} as any,
-    { status: () => ({ json: () => null }) } as any,
-    job.payload
-  );
-});
-
   try {
     // 3️⃣ RUN YOUR EXISTING LOGIC
     await coreHandler(
