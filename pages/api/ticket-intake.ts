@@ -29,6 +29,7 @@ const IS_WEBHOOK = true;
    - NO BUSINESS LOGIC
    - NO STATE ROUTING
    - NO AI
+   - WEBHOOK
 ===================================================== */
 
 export default async function handler(
@@ -55,6 +56,7 @@ export default async function handler(
   if (!condo_id || !phone_number) {
     return res.status(400).json({ error: "Missing required fields" });
   }
+  
 
   /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
 if (message_id) {
@@ -76,6 +78,13 @@ if (message_id) {
 
   
     // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
+await supabase.from("job_queue").insert({
+  condo_id,
+  phone_number,
+  payload: body
+});
+
+return res.status(200).json({ success: true });
 
 }
 
@@ -991,8 +1000,8 @@ async function handleScheduleSelection(
 async function handleContractorAssignment(
   _req: NextApiRequest,
   res: NextApiResponse,
-  description_raw: string,
-  session: any
+  session: any,
+  description_raw: string
 ) {
 
   if (IS_WEBHOOK) {
