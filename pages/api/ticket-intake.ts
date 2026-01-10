@@ -19,25 +19,7 @@ console.log("OPENAI ENABLED:", !!openai);
 const IS_WEBHOOK = true;
 
 
-/* ================= ⭐PER PHONE EXECUTIION LOCK ================= */
-async function withPhoneLock<T>(
-  supabase: any,
-  phone: string,
-  fn: () => Promise<T>
-): Promise<T | null> {
-  const { data: locked } = await supabase.rpc(
-    "pg_try_advisory_lock",
-    { key: phone }
-  );
-
-  if (!locked) return null;
-
-  try {
-    return await fn();
-  } finally {
-    await supabase.rpc("pg_advisory_unlock", { key: phone });
-  }
-}
+/* ================= ⭐PER PHONE EXECUTIION LOCK- removed temp ================= */
 
 
 /*==============================================================================1. 🧠 HANDLERS =================================================================================================*/
@@ -74,17 +56,6 @@ export default async function handler(
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
-await supabase.from("job_queue").insert({
-  condo_id,
-  phone_number,
-  payload: body,
-  status: "pending"
-});
-
-return res.status(200).json({ success: true });
-
-
   /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
 if (message_id) {
   const { error } = await supabase
@@ -101,24 +72,19 @@ if (message_id) {
   }
 }
 
-  // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE)
-   const result = await withPhoneLock(
-    supabase,
-    phone_number, // already normalized
-    async () => {
-    return await coreHandler(req, res, {
-      ...body,
-      phone_number
-      });
-    }
-  );
+  // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE-removed temp)
 
-  // If locked → silently ignore (bank behavior)
-  if (result === null) {
-    return res.status(200).json({ success: true });
-  }
   
-  return result;
+    // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
+await supabase.from("job_queue").insert({
+  condo_id,
+  phone_number,
+  payload: body,
+  status: "pending"
+});
+
+return res.status(200).json({ success: true });
+
 }
 
 /* =====================================================
