@@ -74,6 +74,17 @@ export default async function handler(
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
+await supabase.from("job_queue").insert({
+  condo_id,
+  phone_number,
+  payload: body,
+  status: "pending"
+});
+
+return res.status(200).json({ success: true });
+
+
   /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
 if (message_id) {
   const { error } = await supabase
