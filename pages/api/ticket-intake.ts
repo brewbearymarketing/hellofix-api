@@ -78,13 +78,27 @@ if (message_id) {
   // 🔒 BANK-GRADE SERIALIZATION (ONE MESSAGE PER PHONE-removed temp)
 
   
-    // ✅ FAST EXIT — enqueue job, do NOT process here, AI, phone lock all stop execute in webhook
 await supabase.from("job_queue").insert({
   condo_id,
   phone_number,
   payload: body,
   status: "pending"
 });
+
+// 🚀 IMMEDIATELY TRIGGER WORKER (NO CRON, NO POLLING)
+await fetch(
+  "https://qstash.upstash.io/v2/publish/https://hellofix-api.vercel.app/api/worker",
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.QSTASH_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      phone_number
+    })
+  }
+);
 
 return res.status(200).json({ success: true });
 
