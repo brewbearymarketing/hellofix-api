@@ -1,10 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 
-// IMPORTANT: coreHandler is default export in v11
+// IMPORTANT: coreHandler is default export
 import coreHandler from "./ticket-intake";
-
-import { withPhoneLock } from "@/lib/withPhoneLock";
 
 /* ================= ⭐CLIENT ================= */
 const supabase = createClient(
@@ -12,18 +10,53 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/* ================= 🔒 PHONE LOCK ================= */
+async function withPhoneLock(
+  supabase: any,
+  phone_number: string,
+  fn: () => Promise<void>
+) {
+  const lockKey = `phone:${phone_number}`;
+
+  const { data } = await supabase.rpc("acquire_phone_lock", {
+    lock_key: lockKey
+  });
+
+  if (!data) return null;
+
+  try {
+    return await fn();
+  } finally {
+    await supabase.rpc("release_phone_lock", {
+      lock_key: lockKey
+    });
+  }
+}
+
+/* ================= 📤 SEND WHATSAPP ================= */
+async function sendWhatsAppMessage(
+  phone_number: string,
+  message: string
+) {
+  // 👉 Call your EXISTING Make / Twilio webhook
+  await fetch(process.env.MAKE_SEND_WHATSAPP_WEBHOOK!, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      phone_number,
+      message
+    })
+  });
+}
+
 /* =====================================================
    🧵 BACKGROUND WORKER
-   - Triggered by Vercel Cron
-   - Processes ONE job at a time
-   - Serialised per phone_number
-   - CAPTURES reply_text for WhatsApp
 ===================================================== */
 export default async function worker(
   _req: NextApiRequest,
   res: NextApiResponse
 ) {
-  /* ================= 1️⃣ FETCH ONE PENDING JOB ================= */
+  /* 1️⃣ FETCH JOB */
   const { data: job } = await supabase
     .from("job_queue")
     .select("*")
@@ -36,58 +69,54 @@ export default async function worker(
     return res.status(200).json({ ok: true, empty: true });
   }
 
-  /* ================= 2️⃣ MARK AS PROCESSING ================= */
+  /* 2️⃣ MARK PROCESSING */
   await supabase
     .from("job_queue")
     .update({ status: "processing" })
     .eq("id", job.id);
 
-  let replyPayload: any = null;
+  let replyText: string | null = null;
 
-  /* ================= 3️⃣ FAKE RESPONSE (CAPTURE JSON) ================= */
-let replyText: string | null = null;
-
-const fakeRes = {
-  status: () => ({
-    json: (data: any) => {
-      if (data?.reply_text) {
-        replyText = data.reply_text;
+  /* 3️⃣ FAKE RESPONSE */
+  const fakeRes = {
+    status: () => ({
+      json: (data: any) => {
+        if (data?.reply_text) {
+          replyText = data.reply_text;
+        }
+        return null;
       }
-      return null;
-    }
-  })
-} as any;
+    })
+  } as any;
 
   try {
-    /* ================= 4️⃣ PHONE-LEVEL SERIALISATION ================= */
-   await withPhoneLock(
-  supabase,
-  job.phone_number,
-  async () => {
-    await coreHandler(
-      {} as any,
-      fakeRes,
-      job.payload
+    /* 4️⃣ RUN CORE LOGIC (SERIALISED) */
+    await withPhoneLock(
+      supabase,
+      job.phone_number,
+      async () => {
+        await coreHandler(
+          {} as any,
+          fakeRes,
+          job.payload
+        );
+      }
     );
-  }
-);
 
-// ✅ SEND WHATSAPP MESSAGE HERE
-if (replyText) {
-  await sendWhatsAppMessage(job.phone_number, replyText);
-}
+    /* 5️⃣ SEND WHATSAPP */
+    if (replyText) {
+      await sendWhatsAppMessage(job.phone_number, replyText);
+    }
 
-// ✅ MARK JOB DONE
-await supabase
-  .from("job_queue")
-  .update({ status: "done" })
-  .eq("id", job.id);
-
+    /* 6️⃣ DONE */
+    await supabase
+      .from("job_queue")
+      .update({ status: "done" })
+      .eq("id", job.id);
 
   } catch (err: any) {
     console.error("🔥 WORKER ERROR:", err);
 
-    /* ================= 7️⃣ MARK FAILED ================= */
     await supabase
       .from("job_queue")
       .update({
