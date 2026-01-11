@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { toFile } from "openai/uploads";
 
+
 /* ================= ⭐CLIENTS ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL!,
