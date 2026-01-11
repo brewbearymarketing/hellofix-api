@@ -1,3 +1,10 @@
+export default async function worker(
+  _req: NextApiRequest,
+  res: NextApiResponse
+) {
+  console.log("🕒 WORKER HIT AT", new Date().toISOString());
+
+
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 
@@ -128,3 +135,4 @@ export default async function worker(
 
   return res.status(200).json({ ok: true });
 }
+  }
