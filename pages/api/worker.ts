@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
-import coreHandler from "./ticket-intake";
+import { coreHandler } from "./ticket-intake";
 
 /* ================= CLIENT ================= */
 const supabase = createClient(
