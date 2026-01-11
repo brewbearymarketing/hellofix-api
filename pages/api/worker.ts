@@ -1,7 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
-
-// IMPORTANT: coreHandler is default export
 import coreHandler from "./ticket-intake";
 
 /* ================= ⭐CLIENT ================= */
@@ -10,53 +8,23 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/* ================= 🔒 PHONE LOCK ================= */
-async function withPhoneLock(
-  supabase: any,
-  phone_number: string,
-  fn: () => Promise<void>
-) {
-  const lockKey = `phone:${phone_number}`;
-
-  const { data } = await supabase.rpc("acquire_phone_lock", {
-    lock_key: lockKey
-  });
-
-  if (!data) return null;
-
-  try {
-    return await fn();
-  } finally {
-    await supabase.rpc("release_phone_lock", {
-      lock_key: lockKey
-    });
-  }
-}
-
-/* ================= 📤 SEND WHATSAPP ================= */
-async function sendWhatsAppMessage(
-  phone_number: string,
-  message: string
-) {
-  // 👉 Call your EXISTING Make / Twilio webhook
-  await fetch(process.env.MAKE_SEND_WHATSAPP_WEBHOOK!, {
+/* ================= ⭐SEND WHATSAPP ================= */
+async function sendWhatsAppMessage(phone: string, text: string) {
+  await fetch(process.env.WHATSAPP_SEND_URL!, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      phone_number,
-      message
+      to: phone,
+      message: text
     })
   });
 }
 
-/* =====================================================
-   🧵 BACKGROUND WORKER
-===================================================== */
 export default async function worker(
   _req: NextApiRequest,
   res: NextApiResponse
 ) {
-  /* 1️⃣ FETCH JOB */
+  /* 1️⃣ Get ONE pending job */
   const { data: job } = await supabase
     .from("job_queue")
     .select("*")
@@ -69,7 +37,7 @@ export default async function worker(
     return res.status(200).json({ ok: true, empty: true });
   }
 
-  /* 2️⃣ MARK PROCESSING */
+  /* 2️⃣ Mark processing */
   await supabase
     .from("job_queue")
     .update({ status: "processing" })
@@ -77,46 +45,31 @@ export default async function worker(
 
   let replyText: string | null = null;
 
-  /* 3️⃣ FAKE RESPONSE */
   const fakeRes = {
     status: () => ({
       json: (data: any) => {
-        if (data?.reply_text) {
-          replyText = data.reply_text;
-        }
+        if (data?.reply_text) replyText = data.reply_text;
         return null;
       }
     })
   } as any;
 
   try {
-    /* 4️⃣ RUN CORE LOGIC (SERIALISED) */
-    await withPhoneLock(
-      supabase,
-      job.phone_number,
-      async () => {
-        await coreHandler(
-          {} as any,
-          fakeRes,
-          job.payload
-        );
-      }
-    );
+    /* 3️⃣ Run business logic */
+    await coreHandler({} as any, fakeRes, job.payload);
 
-    /* 5️⃣ SEND WHATSAPP */
+    /* 4️⃣ Send WhatsApp reply */
     if (replyText) {
       await sendWhatsAppMessage(job.phone_number, replyText);
     }
 
-    /* 6️⃣ DONE */
+    /* 5️⃣ Done */
     await supabase
       .from("job_queue")
       .update({ status: "done" })
       .eq("id", job.id);
 
   } catch (err: any) {
-    console.error("🔥 WORKER ERROR:", err);
-
     await supabase
       .from("job_queue")
       .update({
@@ -128,5 +81,3 @@ export default async function worker(
 
   return res.status(200).json({ ok: true });
 }
-
-
