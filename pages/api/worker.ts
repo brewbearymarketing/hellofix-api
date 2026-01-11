@@ -20,7 +20,10 @@ async function withPhoneLock(
     lock_key: lockKey
   });
 
-  if (!data) return;
+ if (!data) {
+  throw new Error("PHONE_LOCKED_RETRY");
+}
+
 
   try {
     await fn();
@@ -48,27 +51,34 @@ async function sendWhatsAppMessage(
 
 /* ================= WORKER ================= */
 export default async function worker(
-  _req: NextApiRequest,
+  req: NextApiRequest,
   res: NextApiResponse
 ) {
-  /* 1️⃣ FETCH ONE JOB */
-  const { data: job } = await supabase
-    .from("job_queue")
-    .select("*")
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const { phone_number } = req.body;
 
-  if (!job) {
-    return res.status(200).json({ ok: true, empty: true });
+  if (!phone_number) {
+    return res.status(400).json({ error: "Missing phone_number" });
   }
 
+    /* 1️⃣ FETCH ONE JOB */
+  const { data: job } = await supabase
+  .from("job_queue")
+  .select("*")
+  .eq("phone_number", phone_number)
+  .eq("status", "pending")
+  .order("created_at", { ascending: true })
+  .limit(1)
+  .maybeSingle();
+
+if (!job) {
+  return res.status(200).json({ ok: true });
+}
+
   /* 2️⃣ MARK PROCESSING */
-  await supabase
-    .from("job_queue")
-    .update({ status: "processing" })
-    .eq("id", job.id);
+await supabase
+  .from("job_queue")
+  .update({ status: "processing" })
+  .eq("id", job.id);
 
   let replyText: string | null = null;
 
