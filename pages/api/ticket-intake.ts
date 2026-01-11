@@ -87,7 +87,7 @@ await supabase.from("job_queue").insert({
 
 // 🚀 IMMEDIATELY TRIGGER WORKER (NO CRON, NO POLLING)
 await fetch(
-  "https://qstash.upstash.io/v2/publish/https://hellofix-api.vercel.app/api/worker",
+  "https://qstash.upstash.io/v2/publish/hellofix-api.vercel.app/api/worker",
   {
     method: "POST",
     headers: {
