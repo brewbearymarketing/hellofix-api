@@ -39,7 +39,14 @@ async function sendWhatsAppMessage(
   phone_number: string,
   message: string
 ) {
-  await fetch(process.env.MAKE_SEND_WHATSAPP_WEBHOOK!, {
+  const url = process.env.MAKE_SEND_WHATSAPP_WEBHOOK;
+
+  if (!url) {
+    console.error("❌ MAKE_SEND_WHATSAPP_WEBHOOK is not set");
+    return; // fail silently, do NOT crash worker
+  }
+
+  await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
