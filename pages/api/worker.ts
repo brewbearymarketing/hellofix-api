@@ -45,43 +45,44 @@ export default async function worker(
   let replyPayload: any = null;
 
   /* ================= 3️⃣ FAKE RESPONSE (CAPTURE JSON) ================= */
-  const fakeRes = {
-    status: () => ({
-      json: (payload: any) => {
-        replyPayload = payload;
-        return payload;
+let replyText: string | null = null;
+
+const fakeRes = {
+  status: () => ({
+    json: (data: any) => {
+      if (data?.reply_text) {
+        replyText = data.reply_text;
       }
-    })
-  } as any;
+      return null;
+    }
+  })
+} as any;
 
   try {
     /* ================= 4️⃣ PHONE-LEVEL SERIALISATION ================= */
-    await withPhoneLock(
-      supabase,
-      job.phone_number,
-      async () => {
-        await coreHandler(
-          {} as any, // req unused
-          fakeRes,
-          job.payload
-        );
-      }
+   await withPhoneLock(
+  supabase,
+  job.phone_number,
+  async () => {
+    await coreHandler(
+      {} as any,
+      fakeRes,
+      job.payload
     );
+  }
+);
 
-    /* ================= 5️⃣ SAVE WHATSAPP REPLY ================= */
-    if (replyPayload?.reply_text) {
-      await supabase.from("outgoing_messages").insert({
-        condo_id: job.condo_id,
-        phone_number: job.phone_number,
-        reply_text: replyPayload.reply_text
-      });
-    }
+// ✅ SEND WHATSAPP MESSAGE HERE
+if (replyText) {
+  await sendWhatsAppMessage(job.phone_number, replyText);
+}
 
-    /* ================= 6️⃣ MARK DONE ================= */
-    await supabase
-      .from("job_queue")
-      .update({ status: "done" })
-      .eq("id", job.id);
+// ✅ MARK JOB DONE
+await supabase
+  .from("job_queue")
+  .update({ status: "done" })
+  .eq("id", job.id);
+
 
   } catch (err: any) {
     console.error("🔥 WORKER ERROR:", err);
