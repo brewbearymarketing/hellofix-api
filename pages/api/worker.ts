@@ -39,20 +39,32 @@ async function sendWhatsAppMessage(
   phone_number: string,
   message: string
 ) {
-  const url = process.env.MAKE_SEND_WHATSAPP_WEBHOOK;
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_WHATSAPP_FROM; // e.g. "whatsapp:+14155238886"
 
-  if (!url) {
-    console.error("❌ MAKE_SEND_WHATSAPP_WEBHOOK is not set");
-    return; // fail silently, do NOT crash worker
+  if (!accountSid || !authToken || !from) {
+    console.error("❌ Twilio env vars missing");
+    return;
   }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+
+  const body = new URLSearchParams({
+    From: from,
+    To: `whatsapp:${phone_number}`,
+    Body: message
+  });
+
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
 
   await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      phone_number,
-      message
-    })
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
   });
 }
 
