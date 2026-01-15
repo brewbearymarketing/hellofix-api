@@ -180,4 +180,7 @@ if (!ticket_id || !gateway_payment_id) {
 
     return res.status(200).json({ ok: true });
    }
-}
+  catch {
+  return res.status(500)
+    }
+  }
