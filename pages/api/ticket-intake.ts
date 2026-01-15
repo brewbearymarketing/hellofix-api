@@ -52,11 +52,12 @@ export default async function handler(
   null;
 
   const { condo_id } = body;
-  const phone_number = normalizeWhatsappPhone(body.phone_number);
-
-  if (!condo_id || !phone_number) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
+    const phone_number = normalizeWhatsappPhone(body.phone_number); // already normalized
+    if (!phone_number) {
+  return res.status(200).json({ success: true });
+}
+    // ✅ TYPE-SAFE (string only beyond this point)
+const phone_number: string = phone_number_raw;
   
 
   /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
@@ -118,12 +119,6 @@ export async function coreHandler(
 ) {
   try{
   const condo_id = body.condo_id;
-  const phone_number = normalizeWhatsappPhone(body.phone_number); // already normalized
-    if (!phone_number) {
-  return res.status(200).json({ success: true });
-}
-    // ✅ TYPE-SAFE (string only beyond this point)
-const phone_number: string = phone_number_raw;
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
