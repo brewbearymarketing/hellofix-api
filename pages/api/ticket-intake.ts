@@ -118,7 +118,7 @@ export async function coreHandler(
 ) {
   try{
   const condo_id = body.condo_id;
-  const phone_number = body.phone_number; // already normalized
+  const phone_number = normalizeWhatsappPhone(body.phone_number); // already normalized
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
