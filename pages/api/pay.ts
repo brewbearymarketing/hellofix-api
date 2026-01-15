@@ -47,8 +47,8 @@ export default async function handler(
         quantity: 1
       }
     ],
-    success_url: "https://hellofix-api.vercel.app/pages/payment/success",
-    cancel_url: "https://hellofix-api.vercel.app/pages/payment/cancelled",
+    success_url: "https://hellofix-api.vercel.app/payment/success",
+    cancel_url: "https://hellofix-api.vercel.app/payment/cancelled",
 
     metadata: {
       ticket_id
