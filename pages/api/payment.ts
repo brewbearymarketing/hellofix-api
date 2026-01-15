@@ -157,35 +157,27 @@ if (!ticket_id || !gateway_payment_id) {
 
 
     /* ================= RESET CONVERSATION ================= */
- await supabase
-  .from("conversation_sessions")
-  .update({
-    state: "contractor_assignment",
-    updated_at: new Date()
-  })
-  .eq("condo_id", ticket.condo_id)
-  .eq("phone_number", ticket.phone_number);
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "contractor_assignment",
+        updated_at: new Date()
+      })
+      .eq("condo_id", ticket.condo_id)
+      .eq("phone_number", ticket.phone_number);
+
+    /* ================= SEND WHATSAPP ================= */
+    await sendWhatsApp(
+      ticket.phone_number,
+      ticket.language === "ms"
+        ? "✅ Pembayaran berjaya diterima.\n\nKontraktor sedang ditugaskan. Anda akan dimaklumkan sebelum lawatan."
+        : ticket.language === "zh"
+        ? "✅ 付款成功。\n\n正在分配承包商，稍后将与您联系。"
+        : ticket.language === "ta"
+        ? "✅ கட்டணம் வெற்றிகரமாக பெறப்பட்டது.\n\nஒப்பந்ததாரர் நியமிக்கப்படுகிறார்."
+        : "✅ Payment received.\n\nA contractor is being assigned. You will be contacted shortly."
+    );
 
     return res.status(200).json({ ok: true });
-  } 
-
-    catch (err: any) {
-    console.error("🔥 PAYMENT WEBHOOK ERROR:", err);
-    return res.status(500).json({
-      error: "Payment processing failed",
-      detail: err.message
-    });
-  }
-
-       /* ================= SEND WHATSAPP ================= */
-  await sendWhatsApp(
-  ticket.phone_number,
-  ticket.language === "ms"
-    ? "✅ Pembayaran berjaya diterima.\n\nKontraktor sedang ditugaskan. Anda akan dimaklumkan sebelum lawatan."
-    : ticket.language === "zh"
-    ? "✅ 付款成功。\n\n正在分配承包商，稍后将与您联系。"
-    : ticket.language === "ta"
-    ? "✅ கட்டணம் வெற்றிகரமாக பெறப்பட்டது.\n\nஒப்பந்ததாரர் நியமிக்கப்படுகிறார்."
-    : "✅ Payment received.\n\nA contractor is being assigned. You will be contacted shortly."
-);
+   }
 }
