@@ -961,7 +961,7 @@ async function handleCategorySelection(
   const diagnosis_fee = CATEGORY_DIAGNOSIS_FEE[category];
   const day = getNextWorkingDay();
   const dateLabel = formatDateForLang(day, lang);
-
+  const categoryLabel = formatMaintenanceCategory(category, lang);
 
   await supabase
     .from("tickets")
@@ -981,12 +981,12 @@ async function handleCategorySelection(
     success: true,
     reply_text:
       lang === "ms"
-        ? `🛠 Kategori dipilih.\nYuran pemeriksaan: RM${diagnosis_fee}\n\nSila pilih slot masa untuk ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
+        ? `🛠 Kategori dipilih ${categoryLabel}.\nYuran pemeriksaan: RM${diagnosis_fee}\n\nSila pilih slot masa untuk ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
         : lang === "zh"
-        ? `🛠 已选择类别。\n检查费：RM${diagnosis_fee}\n\n请选择 ${dateLabel} 的维修时间段：\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
+        ? `🛠 已选择类别 ${categoryLabel}。\n检查费：RM${diagnosis_fee}\n\n请选择 ${dateLabel} 的维修时间段：\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
         : lang === "ta"
-        ? `🛠 வகை தேர்ந்தெடுக்கப்பட்டது.\nசோதனை கட்டணம்: RM${diagnosis_fee}\n\n${dateLabel} க்கான நேர இடைவெளியைத் தேர்வு செய்யவும்:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
-        : `🛠 Category selected.\nDiagnosis fee: RM${diagnosis_fee}\n\nPlease choose a time slot for ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
+        ? `🛠 வகை தேர்ந்தெடுக்கப்பட்டது ${categoryLabel}.\nசோதனை கட்டணம்: RM${diagnosis_fee}\n\n${dateLabel} க்கான நேர இடைவெளியைத் தேர்வு செய்யவும்:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
+        : `🛠 Category selected ${categoryLabel}.\nDiagnosis fee: RM${diagnosis_fee}\n\nPlease choose a time slot for ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
   });
 }
 
