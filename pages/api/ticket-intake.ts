@@ -1875,11 +1875,28 @@ function buildFollowUpReply(
 function normalizeWhatsappPhone(input?: string | null): string | null {
   if (!input) return null;
 
-  return input
-    .toString()
-    .replace(/^whatsapp:/i, "") // remove "whatsapp:"
-    .replace(/\s+/g, "")        // remove spaces
-    .replace(/-/g, "");         // remove dashes
+  let p = input.toString().trim();
+
+  // Remove Twilio / WhatsApp prefix
+  p = p.replace(/^whatsapp:/i, "");
+
+  // Remove spaces, dashes, brackets
+  p = p.replace(/[^\d+]/g, "");
+
+  // Ensure leading +
+  if (!p.startsWith("+")) {
+    // Assume Malaysia if missing country code
+    if (p.startsWith("0")) {
+      p = "+6" + p;
+    } else if (p.startsWith("60")) {
+      p = "+" + p;
+    } else {
+      // Fallback (do not guess too hard)
+      p = "+" + p;
+    }
+  }
+
+  return p;
 }
 
 /*===================== ✅ HELPER WORKING DAY & SLOT ===============================*/
