@@ -52,12 +52,15 @@ export default async function handler(
   null;
 
   const { condo_id } = body;
-    const phone_number = normalizeWhatsappPhone(body.phone_number); // already normalized
-    if (!phone_number) {
+  const phone_number_raw = normalizeWhatsappPhone(body.phone_number);
+
+  if (!phone_number_raw) {
   return res.status(200).json({ success: true });
-}
-    // ✅ TYPE-SAFE (string only beyond this point)
-const phone_number: string = phone_number_raw;
+  }
+
+  // ✅ authoritative, type-safe
+  const phone_number: string = phone_number_raw;
+
   
 
   /* ================= ⭐GUARD FOR DOUBLE FIRE WHATSAPP AUTO REPLY ================= */
@@ -119,6 +122,15 @@ export async function coreHandler(
 ) {
   try{
   const condo_id = body.condo_id;
+  // 🔒 AUTHORITATIVE NORMALIZATION (CORE)
+const phone_number_raw = normalizeWhatsappPhone(body.phone_number);
+
+if (!phone_number_raw) {
+  return res.status(200).json({ success: true });
+}
+
+const phone_number: string = phone_number_raw;
+
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
   const description_raw = await normalizeIncomingMessage(body);
