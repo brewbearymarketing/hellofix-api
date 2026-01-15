@@ -122,15 +122,18 @@ if (!ticket_id || !gateway_payment_id) {
     }
 
     /* ================= LOAD TICKET ================= */
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("id, condo_id, phone_number, language")
-      .eq("id", ticket_id)
-      .maybeSingle();
+  const ticketRes = await supabase
+  .from("tickets")
+  .select("id, condo_id, phone_number, language")
+  .eq("id", ticket_id)
+  .maybeSingle();
 
-    if (!ticket) {
-      throw new Error("Ticket not found");
-    }
+  if (!ticketRes.data) {
+  throw new Error("Ticket not found");
+  }
+
+  const ticket = ticketRes.data;
+
 
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
