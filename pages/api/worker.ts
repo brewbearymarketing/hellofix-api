@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import { coreHandler } from "./ticket-intake";
+import { normalizeWhatsappPhone } from "./ticket-intake";
+
 
 /* ================= CLIENT ================= */
 const supabase = createClient(
@@ -73,11 +75,12 @@ export default async function worker(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  const { phone_number } = req.body;
+const rawPhone = req.body?.phone_number;
+const phone_number = normalizeWhatsappPhone(rawPhone);
 
-  if (!phone_number) {
-    return res.status(400).json({ error: "Missing phone_number" });
-  }
+if (!phone_number) {
+  return res.status(400).json({ error: "Missing phone_number" });
+}
 
     /* 1️⃣ FETCH ONE JOB */
   const { data: job } = await supabase
