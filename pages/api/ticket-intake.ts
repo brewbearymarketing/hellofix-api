@@ -1039,7 +1039,7 @@ async function handleScheduleSelection(
     .update({ state: "awaiting_payment" }) // 🆕 NEW
     .eq("id", session.id);
 
-    const paymentUrl = 'https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}';
+   const paymentUrl = `https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}`;
 
     return res.status(200).json({
     success: true,
