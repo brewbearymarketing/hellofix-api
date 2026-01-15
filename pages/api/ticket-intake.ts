@@ -563,6 +563,18 @@ async function handleConfirmation(
       .from("conversation_sessions")
       .update({ state: "awaiting_category" }) // 🆕 NEW
       .eq("id", session.id);
+
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "✅ Tiket disahkan.\n\nSila pilih kategori:\n1️⃣ Elektrik\n2️⃣ Paip\n3️⃣ Aircond\n4️⃣ Lampu\n5️⃣ Sanitari\n6️⃣ Pintu/Tingkap\n7️⃣ Siling/Dinding\n8️⃣ Lantai\n9️⃣ Kawalan serangga\n🔟 Lain-lain"
+        : lang === "zh"
+        ? "✅ 工单已确认。\n\n请选择维修类别：\n1️⃣ 电力\n2️⃣ 水管\n3️⃣ 空调\n4️⃣ 照明\n5️⃣ 卫生\n6️⃣ 门/窗\n7️⃣ 天花板/墙壁\n8️⃣ 地板\n9️⃣ 害虫控制\n🔟 其他"
+        : lang === "ta"
+        ? "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\n\nவகையைத் தேர்வு செய்யவும்:\n1️⃣ மின்சாரம்\n2️⃣ குழாய்\n3️⃣ ஏர் கண்டிஷனர்\n4️⃣ விளக்கு\n5️⃣ சுகாதாரம்\n6️⃣ கதவு/ஜன்னல்\n7️⃣ சிலிங்/சுவர்\n8️⃣ தரை\n9️⃣ பூச்சி கட்டுப்பாடு\n🔟 பிற"
+        : "✅ Ticket confirmed.\n\nPlease choose a category:\n1️⃣ Electrical\n2️⃣ Plumbing\n3️⃣ Air conditioning\n4️⃣ Lighting\n5️⃣ Sanitary\n6️⃣ Door/Window\n7️⃣ Ceiling/Wall\n8️⃣ Flooring\n9️⃣ Pest control\n🔟 Others"
+  });  
   }
 
 if (text === "2") {
