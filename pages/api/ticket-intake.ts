@@ -2032,6 +2032,81 @@ function formatDateForLang(
   });
 }
 
+/* ================= ✅ HELPER FORMAT MAINTENANCE CATEGORY ================= */
+function formatMaintenanceCategory(
+  category: MaintenanceCategory,
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map: Record<
+    "en" | "ms" | "zh" | "ta",
+    Record<MaintenanceCategory, string>
+  > = {
+    en: {
+      electrical: "Electrical",
+      plumbing: "Plumbing",
+      air_conditioning: "Air conditioning",
+      lighting: "Lighting",
+      sanitary: "Sanitary",
+      door_window: "Door / Window",
+      ceiling_wall: "Ceiling / Wall",
+      flooring: "Flooring",
+      pest_control: "Pest control",
+      lift: "Lift",
+      parking: "Parking",
+      common_facility: "Common facility",
+      others: "Others"
+    },
+    ms: {
+      electrical: "Elektrik",
+      plumbing: "Paip",
+      air_conditioning: "Penyaman udara",
+      lighting: "Lampu",
+      sanitary: "Sanitari",
+      door_window: "Pintu / Tingkap",
+      ceiling_wall: "Siling / Dinding",
+      flooring: "Lantai",
+      pest_control: "Kawalan perosak",
+      lift: "Lif",
+      parking: "Tempat letak kereta",
+      common_facility: "Kemudahan bersama",
+      others: "Lain-lain"
+    },
+    zh: {
+      electrical: "电气",
+      plumbing: "水管",
+      air_conditioning: "空调",
+      lighting: "照明",
+      sanitary: "卫生设施",
+      door_window: "门 / 窗",
+      ceiling_wall: "天花板 / 墙壁",
+      flooring: "地板",
+      pest_control: "害虫控制",
+      lift: "电梯",
+      parking: "停车场",
+      common_facility: "公共设施",
+      others: "其他"
+    },
+    ta: {
+      electrical: "மின்சாரம்",
+      plumbing: "குழாய்",
+      air_conditioning: "குளிரூட்டி",
+      lighting: "விளக்கு",
+      sanitary: "சுகாதாரம்",
+      door_window: "கதவு / ஜன்னல்",
+      ceiling_wall: "மேல்தளம் / சுவர்",
+      flooring: "தரை",
+      pest_control: "பூச்சி கட்டுப்பாடு",
+      lift: "லிப்ட்",
+      parking: "வாகன நிறுத்தம்",
+      common_facility: "பொது வசதி",
+      others: "மற்றவை"
+    }
+  };
+
+  return map[lang][category] ?? category;
+}
+
+
 
 /*====================================================*/
 
