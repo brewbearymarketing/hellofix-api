@@ -246,7 +246,11 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
     }
 
     /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
-    const throttle = await checkThrottle(condo_id, phone_number);
+    const hasActiveTicket = !!effectiveSession?.current_ticket_id;
+
+  const throttle = hasActiveTicket
+  ? { allowed: true, level: "ok", count: 1 }
+  : await checkThrottle(condo_id, phone_number);
 
     if (!throttle.allowed) {
     const tempLang = lang ?? detectLanguage(description_raw);
@@ -258,7 +262,9 @@ if (isMenuReply && !effectiveSession?.current_ticket_id) {
   }
 
 
-    if (throttle.level === "soft" && conversationState === "intake") {
+    if (throttle.level === "soft" && conversationState === "intake" &&
+  !effectiveSession?.current_ticket_id &&
+  !isMenuReply) {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
         const tempLang = lang ?? detectLanguage(description_raw);
