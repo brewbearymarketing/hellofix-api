@@ -953,6 +953,13 @@ async function handleCategorySelection(
   }
 
   const diagnosis_fee = CATEGORY_DIAGNOSIS_FEE[category];
+  const day = getNextWorkingDay();
+  const dateLabel = day.toLocaleDateString("en-GB", {
+  weekday: "long",
+  day: "numeric",
+  month: "short",
+  year: "numeric"
+  });
 
   await supabase
     .from("tickets")
@@ -972,12 +979,12 @@ async function handleCategorySelection(
     success: true,
     reply_text:
       lang === "ms"
-        ? `🛠 Kategori dipilih.\nYuran pemeriksaan: RM${diagnosis_fee}\n\nSila pilih slot masa:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        ? `🛠 Kategori dipilih.\nYuran pemeriksaan: RM${diagnosis_fee}\n\nSila pilih slot masa untuk ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
         : lang === "zh"
-        ? `🛠 已选择类别。\n检查费：RM${diagnosis_fee}\n\n请选择时间段：\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        ? `🛠 已选择类别。\n检查费：RM${diagnosis_fee}\n\n请选择 ${dateLabel} 的维修时间段：\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
         : lang === "ta"
-        ? `🛠 வகை தேர்ந்தெடுக்கப்பட்டது.\nசோதனை கட்டணம்: RM${diagnosis_fee}\n\nநேரத்தை தேர்வு செய்யவும்:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
-        : `🛠 Category selected.\nDiagnosis fee: RM${diagnosis_fee}\n\nPlease choose a time slot:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–6pm`
+        ? `🛠 வகை தேர்ந்தெடுக்கப்பட்டது.\nசோதனை கட்டணம்: RM${diagnosis_fee}\n\n${dateLabel} க்கான நேர இடைவெளியைத் தேர்வு செய்யவும்:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
+        : `🛠 Category selected.\nDiagnosis fee: RM${diagnosis_fee}\n\nPlease choose a time slot for ${dateLabel}:\n1️⃣ 9am–12pm\n2️⃣ 12pm–3pm\n3️⃣ 3pm–5pm`
   });
 }
 
@@ -1004,6 +1011,19 @@ async function handleScheduleSelection(
   const day = getNextWorkingDay();
   const slots = buildSlots(day);
   const chosen = slots[Number(text) - 1];
+  const dateLabel = day.toLocaleDateString("en-GB", {
+  weekday: "long",
+  day: "numeric",
+  month: "short",
+  year: "numeric"
+  });
+
+  const timeLabel =
+  text === "1"
+    ? "9am–12pm"
+    : text === "2"
+    ? "12pm–3pm"
+    : "3pm–5pm";
 
   await supabase
     .from("tickets")
@@ -1027,12 +1047,12 @@ async function handleScheduleSelection(
     buildFollowUpReply(lang, "confirm_success") +
     "\n\n" +
     (lang === "ms"
-      ? `⏰ Slot masa telah dipilih.\n\n💳 Bayaran pemeriksaan diperlukan untuk meneruskan 😊\nSila buat pembayaran melalui pautan berikut:\n${paymentUrl}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
+      ? `⏰ Slot masa dipilih: ${dateLabel}, ${timeLabel}.\n\n💳 Bayaran pemeriksaan diperlukan untuk meneruskan 😊\nSila buat pembayaran melalui pautan berikut:\n${paymentUrl}\n\nSelepas pembayaran disahkan:\n• Kontraktor akan ditugaskan\n• Anda akan dimaklumkan melalui WhatsApp`
       : lang === "zh"
-      ? `⏰ 已为您选择维修时间段。\n\n💳 为了继续处理，需要先完成检查费用的付款 😊\n请通过以下链接进行付款：\n${paymentUrl}\n\n付款确认后：\n• 将分配承包商\n• 您将通过 WhatsApp 收到通知`
+      ? `⏰ 已选择维修时间：${dateLabel}，${timeLabel}。\n\n💳 为了继续处理，需要先完成检查费用的付款 😊\n请通过以下链接进行付款：\n${paymentUrl}\n\n付款确认后：\n• 将分配承包商\n• 您将通过 WhatsApp 收到通知`
       : lang === "ta"
-      ? `⏰ உங்கள் நேரம் தேர்ந்தெடுக்கப்பட்டுள்ளது.\n\n💳 அடுத்த கட்டத்திற்குச் செல்ல, சோதனை கட்டணம் செலுத்தப்பட வேண்டும் 😊\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பிறகு:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
-      : `⏰ Your time slot has been selected.\n\n💳 To proceed, a diagnosis payment is required 😊\nPlease complete the payment using the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
+      ? `⏰ தேர்ந்தெடுக்கப்பட்ட நேரம்: ${dateLabel}, ${timeLabel}ு.\n\n💳 அடுத்த கட்டத்திற்குச் செல்ல, சோதனை கட்டணம் செலுத்தப்பட வேண்டும் 😊\nகீழே உள்ள இணைப்பின் மூலம் பணம் செலுத்தவும்:\n${paymentUrl}\n\nபணம் உறுதி செய்யப்பட்ட பிறகு:\n• ஒப்பந்ததாரர் நியமிக்கப்படுவார்\n• WhatsApp மூலம் அறிவிக்கப்படும்`
+      : `⏰ Slot selected: ${dateLabel}, ${timeLabel}.\n\n💳 To proceed, a diagnosis payment is required 😊\nPlease complete the payment using the link below:\n${paymentUrl}\n\nAfter payment is confirmed:\n• A contractor will be assigned\n• You will be notified via WhatsApp`)
     });
 }
 
