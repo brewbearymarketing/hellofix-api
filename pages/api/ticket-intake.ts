@@ -954,12 +954,8 @@ async function handleCategorySelection(
 
   const diagnosis_fee = CATEGORY_DIAGNOSIS_FEE[category];
   const day = getNextWorkingDay();
-  const dateLabel = day.toLocaleDateString("en-GB", {
-  weekday: "long",
-  day: "numeric",
-  month: "short",
-  year: "numeric"
-  });
+  const dateLabel = formatDateForLang(day, lang);
+
 
   await supabase
     .from("tickets")
@@ -1011,12 +1007,7 @@ async function handleScheduleSelection(
   const day = getNextWorkingDay();
   const slots = buildSlots(day);
   const chosen = slots[Number(text) - 1];
-  const dateLabel = day.toLocaleDateString("en-GB", {
-  weekday: "long",
-  day: "numeric",
-  month: "short",
-  year: "numeric"
-  });
+  const dateLabel = formatDateForLang(day, lang);
 
   const timeLabel =
   text === "1"
@@ -2013,6 +2004,26 @@ async function processRefund(ticketId: string) {
 function normalizeText(input: unknown): string {
   if (typeof input !== "string") return "";
   return input.trim();
+}
+
+/* ================= ✅ HELPER localize date ================= */
+function formatDateForLang(
+  date: Date,
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const localeMap: Record<typeof lang, string> = {
+    en: "en-GB",
+    ms: "ms-MY",
+    zh: "zh-CN",
+    ta: "ta-IN"
+  };
+
+  return date.toLocaleDateString(localeMap[lang], {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
 }
 
 
