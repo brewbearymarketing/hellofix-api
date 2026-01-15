@@ -1872,7 +1872,7 @@ function buildFollowUpReply(
 }
 
 /*===================== ✅ HELPER NORMALIZE PHONE ===============================*/
-function normalizeWhatsappPhone(input?: string | null): string | null {
+export function normalizeWhatsappPhone(input?: string | null): string | null {
   if (!input) return null;
 
   let p = input.toString().trim();
