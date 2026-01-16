@@ -525,7 +525,8 @@ async function routeByState(
       return handleScheduleSelection(req, res, session,description_raw);
 
     case "contractor_assignment":
-      return handleContractorAssignment(req, res, session,description_raw);
+    case "paid":
+      return handlePostPayment(req, res, session, description_raw);
 
     case "closed":
       return res.status(200).json({ success: true });
@@ -1102,6 +1103,55 @@ async function handleContractorAssignment(
 
   return res.status(200).json({ success: true });
 }
+
+// 🆕 NEW — POST PAYMENT PROMPT
+async function handlePostPayment(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any,
+  description_raw: string
+) {
+  const text = normalizeText(description_raw).toUpperCase();
+  const lang = session.language ?? "en";
+
+  // 🆕 USER WANTS TO CREATE A NEW TICKET
+  if (text === "NEW") {
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "intake",
+        current_ticket_id: null,
+        updated_at: new Date()
+      })
+      .eq("id", session.id);
+
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Baik 😊 Sila terangkan masalah penyelenggaraan yang baharu."
+          : lang === "zh"
+          ? "好的 😊 请描述新的维修问题。"
+          : lang === "ta"
+          ? "சரி 😊 புதிய பராமரிப்பு பிரச்சனையை விவரிக்கவும்."
+          : "Sure 😊 Please describe the new maintenance issue."
+    });
+  }
+
+  // 🟢 DEFAULT FRIENDLY REASSURANCE
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "👍 Tiket anda sedang diproses. Kami akan maklumkan sebelum lawatan."
+        : lang === "zh"
+        ? "👍 您的工单正在处理中，我们会在上门前通知您。"
+        : lang === "ta"
+        ? "👍 உங்கள் கோரிக்கை செயல்பாட்டில் உள்ளது. விரைவில் தகவல் வழங்கப்படும்."
+        : "👍 Your request is being handled. We’ll update you shortly."
+  });
+}
+
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
 
@@ -1833,21 +1883,19 @@ function buildFollowUpReply(
     | "confirm_success"
     | "ask_edit"
     | "cancelled"
-    | "payment_prompt"
     | "invalid_confirm"
-    | "invalid_payment"
 ): string {
   switch (type) {
     case "confirm_success":
       switch (lang) {
         case "ms":
-          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30\nBalas PAY untuk teruskan pembayaran.";
+          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30.";
         case "zh":
-          return "✅ 工单已确认。\n检查费用：RM30\n回复 PAY 以继续付款。";
+          return "✅ 工单已确认。\n检查费用：RM30.";
         case "ta":
-          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30\nபணம் செலுத்த PAY என பதிலளிக்கவும்.";
+          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30.";
         default:
-          return "✅ Ticket confirmed.\nDiagnosis fee: RM30\nReply PAY to proceed.";
+          return "✅ Ticket confirmed.\nDiagnosis fee: RM30.";
       }
 
     case "ask_edit":
@@ -1874,18 +1922,6 @@ function buildFollowUpReply(
           return "❌ Ticket cancelled.";
       }
 
-    case "payment_prompt":
-      switch (lang) {
-        case "ms":
-          return "💳 Balas PAY untuk membuat pembayaran atau CANCEL untuk batalkan tiket.";
-        case "zh":
-          return "💳 回复 PAY 进行付款，或回复 CANCEL 取消工单。";
-        case "ta":
-          return "💳 பணம் செலுத்த PAY அல்லது ரத்து செய்ய CANCEL என பதிலளிக்கவும்.";
-        default:
-          return "💳 Reply PAY to proceed or CANCEL to cancel the ticket.";
-      }
-
     case "invalid_confirm":
       switch (lang) {
         case "ms":
@@ -1896,18 +1932,6 @@ function buildFollowUpReply(
           return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
         default:
           return "Please reply with 1, 2, or 3 only.";
-      }
-
-    case "invalid_payment":
-      switch (lang) {
-        case "ms":
-          return "Sila balas PAY atau CANCEL sahaja.";
-        case "zh":
-          return "请仅回复 PAY 或 CANCEL。";
-        case "ta":
-          return "PAY அல்லது CANCEL மட்டுமே பதிலளிக்கவும்.";
-        default:
-          return "Please reply PAY or CANCEL only.";
       }
   }
 }
