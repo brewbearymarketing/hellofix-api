@@ -200,15 +200,18 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
   const terminalStatuses = [
   "cancelled",
   "cancelled_system",
-  "closed"
+  "closed",
+  "paid"
   // ⚠️ DO NOT include "paid" here
 ];
 
- if (
+if (
   activeTicket &&
   terminalStatuses.includes(activeTicket.status) &&
-  effectiveSession?.state !== "intake_v2"
-) {
+  effectiveSession?.state !== "intake_v2" &&
+  effectiveSession?.expected_input !== "type_description"
+)
+ {
 
     await supabase
       .from("conversation_sessions")
@@ -1257,12 +1260,13 @@ async function handleSecondIntake(
   ===================================================== */
   const meaningful = await aiIsMeaningfulIssue(text);
 
-  if (!meaningful) {
-    return res.status(200).json({
-      success: true
-      // ❌ NO reply_text (post-payment already asked user)
-    });
-  }
+return res.status(200).json({
+  success: true,
+  reply_text:
+    lang === "ms"
+      ? "Sila terangkan masalah penyelenggaraan yang baharu."
+      : "Please describe the new maintenance issue."
+});
 
   /* =====================================================
      ✅ VALID SECOND TICKET DESCRIPTION
