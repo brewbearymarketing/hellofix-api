@@ -226,9 +226,6 @@ if (activeTicket) {
   }
 }
 
-    const finalConversationState =
-  effectiveSession?.state ?? "intake";
-
 /* ================= 🔐 BANK-GRADE EXPECTED INPUT GATE ================= */
 
 const expectedInput = effectiveSession?.expected_input ?? "type_description";
@@ -252,15 +249,15 @@ if (
 if (!effectiveSession) {
   effectiveSession = {
     id: null,                  // not persisted yet
-    condo_id,                  // from coreHandler scope
-    phone_number,              // normalized phone
     state: "intake",            // default first-contact state
     current_ticket_id: null,
     expected_input: "type_description",
     language: null
   };
 }
-  
+
+        const finalConversationState =
+  effectiveSession?.state ?? "intake";  
 
 /* =====================================================
      🔁 SINGLE STATE ROUTE (NON-INTAKE)
@@ -700,7 +697,8 @@ async function handleEditMenu(
   if (text === "1") {
     await supabase
       .from("conversation_sessions")
-      .update({ state: "draft_edit" })
+      .update({ state: "draft_edit",
+      expected_input: "draft_edit"})
       .eq("id", session.id);
 
 
@@ -720,7 +718,8 @@ async function handleEditMenu(
   if (text === "2") {
     await supabase
       .from("conversation_sessions")
-      .update({ state: "edit_category" })
+      .update({ state: "edit_category", 
+       expected_input: "edit_category"})
       .eq("condo_id", session.condo_id)
       .eq("id", session.id)
       .eq("phone_number", session.phone_number);
@@ -738,6 +737,11 @@ async function handleEditMenu(
           : "🏷️ Select category:\n1️⃣ Unit\n2️⃣ Common area\n3️⃣ Mixed"
     });
   }
+  
+  await supabase
+  .from("conversation_sessions")
+  .update({ expected_input: "edit_menu" })
+  .eq("id", session.id);
 
   return res.status(200).json({
     success: true,
