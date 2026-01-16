@@ -225,46 +225,43 @@ if (activeTicket.status === "awaiting_payment") {
   current_ticket_id: null,
   expected_input: "type_description" // 🔐 REQUIRED
       };
-    }
-    catch (err: any) {
-    console.error("🔥 ERROR:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
-    });
+    /* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
+  if (!effectiveSession) {
+    effectiveSession = {
+      id: null,
+      state: "intake",
+      current_ticket_id: null,
+      expected_input: "type_description",
+      language: null
+    };
   }
-}
-}
 
-/* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
-if (!effectiveSession) {
-  effectiveSession = {
-    id: null,
-    state: "intake",
-    current_ticket_id: null,
-    expected_input: "type_description",
-    language: null
-  };
-}
+  /* ================= 🧠 FINAL STATE DERIVATION ================= */
+  const finalConversationState =
+    effectiveSession.state ?? "intake";
 
-/* ================= 🧠 FINAL STATE DERIVATION ================= */
-const finalConversationState =
-  effectiveSession.state ?? "intake";
+  const expectedInput =
+    effectiveSession.expected_input ?? "type_description";
 
-const expectedInput =
-  effectiveSession.expected_input ?? "type_description";
+  /* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
+  if (effectiveSession.current_ticket_id) {
+    return routeByState(req, res, effectiveSession, description_raw);
+  }
 
-/* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
-if (effectiveSession.current_ticket_id) {
-  return routeByState(req, res, effectiveSession, description_raw);
-}
-
-    /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
-if (
-  ["post_payment", "contractor_assignment", "paid"].includes(finalConversationState)
-) {
-  return routeByState(req, res, effectiveSession, description_raw);
-}
+  /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
+  if (
+    ["post_payment", "contractor_assignment", "paid"].includes(finalConversationState)
+  ) {
+    return routeByState(req, res, effectiveSession, description_raw);
+  }
+} catch (err: any) {
+  console.error("🔥 ERROR:", err);
+  return res.status(500).json({
+    error: "Internal Server Error",
+    detail: err.message
+      });
+    }
+  }
 
 /* =====================================================
      🔁 SINGLE STATE ROUTE (NON-INTAKE)
