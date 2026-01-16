@@ -208,7 +208,7 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
     await supabase
       .from("conversation_sessions")
       .update({
-        state: "intake",
+        state: "intake_v2",
         current_ticket_id: null,
         expected_input: "type_description", 
         updated_at: new Date()
@@ -218,7 +218,7 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
    effectiveSession = {
   id: effectiveSession!.id,
   language: effectiveSession!.language,
-  state: "intake",
+  state: "intake_v2",
   current_ticket_id: null,
   expected_input: "type_description" // 🔐 REQUIRED
       };
@@ -238,10 +238,16 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
   const finalConversationState =
     effectiveSession.state ?? "intake";
 
+  // 🆕 SECOND TICKET INTAKE PIPELINE
+if (finalConversationState === "intake_v2") {
+  return handleSecondIntake(req, res, effectiveSession, description_raw);
+}
+
   const expectedInput =
     effectiveSession.expected_input ?? "type_description";
 
-   if (
+// PRIMARY INTAKE (FIRST TICKET ONLY)
+if (
   finalConversationState !== "intake" ||
   effectiveSession?.expected_input !== "type_description"
 ) {
@@ -569,7 +575,6 @@ async function routeByState(
     case "paid":
       return handlePostPayment(req, res, session, description_raw);
 
-
     case "closed":
       return res.status(200).json({ success: true });
 
@@ -660,7 +665,7 @@ if (text === "3") {
  await supabase
   .from("conversation_sessions")
   .update({
-    state: "intake",
+    state: "intake_v2",
     current_ticket_id: null,
     expected_input: "type_description"
   })
@@ -955,7 +960,7 @@ async function handlePayment(
     await supabase
   .from("conversation_sessions")
   .update({
-    state: "intake",
+    state: "intake_v2",
     current_ticket_id: null,
     expected_input: "type_description"
   })
@@ -1186,7 +1191,7 @@ async function handlePostPayment(
     await supabase
       .from("conversation_sessions")
       .update({
-        state: "intake",
+        state: "intake_v2",
         current_ticket_id: null,
         expected_input: "type_description",
         updated_at: new Date()
@@ -1220,6 +1225,63 @@ async function handlePostPayment(
   });
 }
 
+// 🆕 SECOND TICKET INTAKE (BANK-GRADE, CLEAN UX)
+async function handleSecondIntake(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  session: any,
+  description_raw: string
+) {
+  const lang = session.language ?? "en";
+
+  // 🔒 HARD RULE: numeric replies are NEVER valid here
+  if (/^\d+$/.test(description_raw)) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila terangkan masalah penyelenggaraan yang baharu."
+          : lang === "zh"
+          ? "请描述新的维修问题。"
+          : lang === "ta"
+          ? "புதிய பராமரிப்பு பிரச்சனையை விவரிக்கவும்."
+          : "Please describe the new maintenance issue."
+    });
+  }
+
+  // 🔒 No greeting flow, no throttle reuse
+  const meaningful = await aiIsMeaningfulIssue(description_raw);
+  if (!meaningful) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Kami sedia membantu. Sila terangkan isu penyelenggaraan."
+          : lang === "zh"
+          ? "我们可以协助您，请描述维修问题。"
+          : lang === "ta"
+          ? "நாங்கள் உதவ தயாராக உள்ளோம். பராமரிப்பு பிரச்சனையை விவரிக்கவும்."
+          : "We’re ready to help. Please describe the maintenance issue."
+    });
+  }
+
+  // ✅ VALID — hand off to PRIMARY intake safely
+  await supabase
+    .from("conversation_sessions")
+    .update({
+      state: "intake",
+      expected_input: "type_description",
+      updated_at: new Date()
+    })
+    .eq("id", session.id);
+
+  // Re-enter intake cleanly
+  return routeByState(req, res, {
+  ...session,
+  state: "intake",
+  expected_input: "type_description"
+}, description_raw);
+}
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
 
