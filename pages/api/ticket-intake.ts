@@ -278,6 +278,24 @@ if (
   return routeByState(req, res, effectiveSession, description_raw);
 }
 
+    /* ================= 🔒 BLOCK SYSTEM PLACEHOLDER FROM INTAKE ================= */
+
+const SYSTEM_PLACEHOLDER_TEXTS = [
+  "please provide the issue",
+  "please provide the issue to be rewritten",
+  "issue description pending",
+  "photo evidence provided"
+];
+
+if (
+  finalConversationState === "intake" &&
+  SYSTEM_PLACEHOLDER_TEXTS.some(p =>
+    description_raw.toLowerCase().includes(p)
+  )
+) {
+  // 🔁 Force router to handle state instead of creating new ticket
+  return routeByState(req, res, effectiveSession, description_raw);
+}
 
   /* =====================================================
      ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
