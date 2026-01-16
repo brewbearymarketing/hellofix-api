@@ -148,15 +148,20 @@ const phone_number: string = phone_number_raw;
   .maybeSingle();
 
     /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
-  const { data: existingTicket } = await supabase
-  .from("tickets")
-  .select("id, status, language")
-  .eq("condo_id", condo_id)
-  .in("status", ["new", "confirmed"])
-  .order("created_at", { ascending: false })
-  .limit(1)
-  .maybeSingle();
+const ticketId = effectiveSession?.current_ticket_id
+  ?? null;
 
+let ticket = null;
+
+if (ticketId) {
+  const { data } = await supabase
+    .from("tickets")
+    .select("*")
+    .eq("id", ticketId)
+    .maybeSingle();
+
+  ticket = data;
+}
 
 /* ================= 🔴🧠 HANDLERS SESSION AUTO-RECOVERY (MANDATORY) ================= */
 let effectiveSession = session;
@@ -186,6 +191,15 @@ const lockedLang: "en" | "ms" | "zh" | "ta" =
   effectiveSession?.language ??
   existingTicket?.language ??
   detectLanguage(description_raw);
+
+  // 🚨 SAFETY ASSERT — MUST NEVER HAPPEN
+if (
+  effectiveSession?.current_ticket_id &&
+  conversationState === "intake"
+) {
+  throw new Error("Illegal state: intake with active ticket");
+}
+
     
 /* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
 if (
