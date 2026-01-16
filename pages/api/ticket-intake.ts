@@ -116,7 +116,7 @@ export async function coreHandler(
   req: NextApiRequest,
   res: NextApiResponse,
   body: any
-) {
+): Promise<void> {
   try{
   const condo_id = body.condo_id;
   // 🔒 AUTHORITATIVE NORMALIZATION (CORE)
