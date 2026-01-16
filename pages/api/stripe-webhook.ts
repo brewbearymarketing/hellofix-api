@@ -123,8 +123,8 @@ export default async function handler(
     return res.status(200).json({ ignored: true });
   }
 
-  const paymentId = session.payment_intent as string;
-  const ticketId = session.metadata?.ticket_id;
+  const paymentId = checkoutSession.payment_intent as string;
+  const ticketId = checkoutSession.metadata?.ticket_id;
 
   const amount =
   (checkoutSession.amount_total ?? 0) / 100;
@@ -164,7 +164,7 @@ export default async function handler(
   .eq("current_ticket_id", ticket.id)
   .maybeSingle();
 
-if (!session) {
+if (!convSession) {
   throw new Error("Conversation session not found");
 }
 
@@ -198,6 +198,6 @@ if (!session) {
     return res.status(200).json({ ok: true });
   } catch (err: any) {
     console.error("🔥 Webhook error:", err);
-    return res.status(500).json({ error: "Payment processing failed" });
+    return res.status(200).json({ handled: false });
   }
 }
