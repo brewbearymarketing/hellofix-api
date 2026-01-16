@@ -168,7 +168,8 @@ if (!ticket_id || !gateway_payment_id) {
       .eq("phone_number", ticket.phone_number);
 
     /* ================= SEND WHATSAPP ================= */
-    await sendWhatsApp(
+    try {
+      await sendWhatsApp(
       ticket.phone_number,
       ticket.language === "ms"
         ? "✅ Pembayaran berjaya diterima.\n\nKontraktor sedang ditugaskan. Anda akan dimaklumkan sebelum lawatan."
@@ -179,9 +180,9 @@ if (!ticket_id || !gateway_payment_id) {
         : "✅ Payment received.\n\nA contractor is being assigned. You will be contacted shortly."
     );
 
-    return res.status(200).json({ ok: true });
-   }
-  catch {
-  return res.status(500)
+   } catch (err) {
+  console.error("⚠️ WhatsApp send failed:", err);
+  // DO NOT throw — payment is already valid
     }
-  }
+   }
+}
