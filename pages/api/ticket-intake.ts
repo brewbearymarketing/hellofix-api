@@ -204,7 +204,11 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
   // ⚠️ DO NOT include "paid" here
 ];
 
-  if (activeTicket && terminalStatuses.includes(activeTicket.status)) {
+ if (
+  activeTicket &&
+  terminalStatuses.includes(activeTicket.status) &&
+  effectiveSession.state !== "intake_v2"
+) {
     await supabase
       .from("conversation_sessions")
       .update({
