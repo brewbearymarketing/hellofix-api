@@ -142,7 +142,7 @@ const phone_number: string = phone_number_raw;
     /* ===== 🧠 HANDLERS FETCH SESSION ===== */
   const { data: session } = await supabase
   .from("conversation_sessions")
-  .select("id, state, current_ticket_id, language")
+  .select("id, state, current_ticket_id, language, expected_input")
   .eq("condo_id", condo_id)
   .eq("phone_number", phone_number)
   .maybeSingle();
@@ -180,9 +180,6 @@ if (!session && existingTicket) {
   effectiveSession = recoveredSession;
 }
 
-const conversationState =
-  effectiveSession?.state ?? "intake";
-
     /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
 const ticketId = effectiveSession?.current_ticket_id
   ?? null;
@@ -214,6 +211,7 @@ if (activeTicket) {
       .update({
         state: "intake",
         current_ticket_id: null,
+        expected_input: "type_description", 
         updated_at: new Date()
       })
       .eq("id", effectiveSession?.id);
@@ -230,22 +228,17 @@ if (activeTicket) {
     const finalConversationState =
   effectiveSession?.state ?? "intake";
 
+/* ================= 🔐 BANK-GRADE EXPECTED INPUT GATE ================= */
 
- /* ================= 🔒 HARD GUARD: INTAKE ONLY IF NO ACTIVE TICKET (v1.1) ================= */
+const expectedInput = effectiveSession?.expected_input ?? "type_description";
 
+// 🚫 ABSOLUTE BLOCK: INTAKE IS NEVER RE-ENTERED UNLESS EXPECTED
 if (
-  finalConversationState === "intake" &&
-  effectiveSession?.current_ticket_id
+  expectedInput !== "type_description" &&
+  finalConversationState === "intake"
 ) {
   return routeByState(req, res, effectiveSession, description_raw);
 }
-
-    // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
-const lockedLang: "en" | "ms" | "zh" | "ta" =
-  effectiveSession?.language ??
-  existingTicket?.language ??
-  activeTicket?.language ??
-  detectLanguage(description_raw);
 
     /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
 if (
@@ -262,38 +255,10 @@ if (
      - NO GUESSING
   ===================================================== */
 
-  if (finalConversationState !== "intake") {
-  return routeByState(req, res, effectiveSession, description_raw);
-  }
-
-  /* ================= 🔒 HARD STOP: MENU REPLY MUST NOT RE-ENTER INTAKE ================= */
-const menuText = normalizeText(description_raw);
-const isMenuReply = /^[0-9]+$/.test(menuText);
-
-// 🚨 If there is an active ticket, menu replies MUST go through state router ONLY
-if (
-  isMenuReply &&
-  effectiveSession?.current_ticket_id
+ if (
+  finalConversationState !== "intake" ||
+  effectiveSession?.expected_input !== "type_description"
 ) {
-  return routeByState(req, res, effectiveSession, description_raw);
-}
-
-    /* ================= 🔒 BLOCK SYSTEM PLACEHOLDER FROM INTAKE ================= */
-
-const SYSTEM_PLACEHOLDER_TEXTS = [
-  "please provide the issue",
-  "please provide the issue to be rewritten",
-  "issue description pending",
-  "photo evidence provided"
-];
-
-if (
-  finalConversationState === "intake" &&
-  SYSTEM_PLACEHOLDER_TEXTS.some(p =>
-    description_raw.toLowerCase().includes(p)
-  )
-) {
-  // 🔁 Force router to handle state instead of creating new ticket
   return routeByState(req, res, effectiveSession, description_raw);
 }
 
@@ -339,8 +304,7 @@ if (
 
 
     if (throttle.level === "soft" && finalConversationState === "intake" &&
-  !effectiveSession?.current_ticket_id &&
-  !isMenuReply) {
+  !effectiveSession?.current_ticket_id) {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
       if (!meaningful) {
         const tempLang = lang ?? detectLanguage(description_raw);
@@ -354,7 +318,6 @@ if (
 
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
-  !isMenuReply &&
   finalConversationState === "intake" &&
   !effectiveSession?.current_ticket_id &&
   isGreetingOnly(description_raw)
@@ -391,7 +354,7 @@ return res.status(200).json({
 }
     
    /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
-if (finalConversationState === "intake" && !isMenuReply) {
+if (finalConversationState === "intake") {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
@@ -486,16 +449,17 @@ const description_display =
       if (error || !ticket) throw error;
     
 /* ===== 🔒 SET CONVERSATION STATE AFTER INTAKE ===== */
-      await supabase
-      .from("conversation_sessions")
-      .upsert({
+   await supabase
+    .from("conversation_sessions")
+    .upsert({
       condo_id,
       phone_number,
       current_ticket_id: ticket.id,
       state: "awaiting_confirmation",
+      expected_input: "confirm_menu", // 🔐 LOCK
       language: lang,
       updated_at: new Date()
-      });
+  });
 
     /* ===== 🧠 EMBEDDING + DUPLICATE ===== */
     if (!IS_WEBHOOK && openai && description_clean) {
@@ -626,6 +590,16 @@ async function handleConfirmation(
   session: any,
   description_raw: string
 ) {
+
+/* ================= 🔐 CONFIRM MENU LOCK ================= */
+
+await supabase
+  .from("conversation_sessions")
+  .update({
+    expected_input: "confirm_menu"
+  })
+  .eq("id", session.id);
+
   const text = normalizeText(description_raw);
   const lang = session.language ?? "en";
 
@@ -639,15 +613,13 @@ async function handleConfirmation(
   const ticketId = session.current_ticket_id;
 
   if (text === "1") {
-    await supabase
-      .from("tickets")
-      .update({ status: "confirmed" })
-      .eq("id", ticketId);
-
-    await supabase
-      .from("conversation_sessions")
-      .update({ state: "awaiting_category" }) // 🆕 NEW
-      .eq("id", session.id);
+     await supabase
+    .from("conversation_sessions")
+    .update({
+    state: "awaiting_category",
+    expected_input: "category_select"
+    })
+    .eq("id", session.id);
 
   return res.status(200).json({
     success: true,
@@ -662,10 +634,13 @@ async function handleConfirmation(
   });  
   }
 
-if (text === "2") {
+  if (text === "2") {
   await supabase
     .from("conversation_sessions")
-    .update({ state: "edit_menu" })
+    .update({
+      state: "edit_menu",
+      expected_input: "edit_menu"
+    })
     .eq("id", session.id);
 
   return res.status(200).json({
@@ -682,18 +657,14 @@ if (text === "2") {
 }
 
 if (text === "3") {
-  await supabase
-    .from("tickets")
-    .update({ status: "cancelled" })
-    .eq("id", ticketId);
-
-  await supabase
-    .from("conversation_sessions")
-    .update({
-      state: "intake",
-      current_ticket_id: null
-    })
-    .eq("id", session.id);
+ await supabase
+  .from("conversation_sessions")
+  .update({
+    state: "intake",
+    current_ticket_id: null,
+    expected_input: "type_description"
+  })
+  .eq("id", session.id);
 
 
   return res.status(200).json({
@@ -816,10 +787,12 @@ if (!newText || newText.length < 10) {
     : await aiTranslateForDisplay(latestClean, lang);
   
   await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_confirmation" })
-    .eq("id", session.id);
-
+  .from("conversation_sessions")
+  .update({
+    state: "awaiting_confirmation",
+    expected_input: "confirm_menu"
+  })
+  .eq("id", session.id);
 
 return res.status(200).json({
   success: true,
@@ -915,9 +888,12 @@ async function handleEditCategory(
     .eq("id", session.current_ticket_id);
 
   await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_confirmation" })
-    .eq("id", session.id);
+  .from("conversation_sessions")
+  .update({
+    state: "awaiting_confirmation",
+    expected_input: "confirm_menu"
+  })
+  .eq("id", session.id);
 
   const label = formatIntentLabel(selected, lang);
 
@@ -971,19 +947,31 @@ async function handlePayment(
       .eq("id", ticketId);
 
     await supabase
-      .from("conversation_sessions")
-      .update({
-        state: "intake",
-        current_ticket_id: null
-      })
-      .eq("id", session.id);
-
+  .from("conversation_sessions")
+  .update({
+    state: "intake",
+    current_ticket_id: null,
+    expected_input: "type_description"
+  })
+  .eq("id", session.id);
 
     return res.status(200).json({
       success: true,
       reply_text: buildFollowUpReply(lang, "cancelled")
     }); 
   }
+  /* ================= 🟢 DEFAULT PAYMENT REMINDER ================= */
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "Sila lengkapkan pembayaran atau taip CANCEL untuk batalkan."
+        : lang === "zh"
+        ? "请完成付款，或回复 CANCEL 取消。"
+        : lang === "ta"
+        ? "பணம் செலுத்தவும் அல்லது CANCEL என টাইப் செய்து ரத்து செய்யவும்."
+        : "Please complete the payment, or type CANCEL to cancel."
+  });
 }
 
 // 🆕 NEW — HANDLE CATEGORY SELECTION
@@ -1040,8 +1028,12 @@ async function handleCategorySelection(
     .eq("id", session.current_ticket_id);
 
   await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_schedule" }) // 🆕 NEW
+  .from("conversation_sessions")
+  .update({
+    state: "awaiting_schedule",
+    expected_input: "schedule_select"
+  })
+
     .eq("id", session.id);
 
   return res.status(200).json({
@@ -1099,8 +1091,11 @@ async function handleScheduleSelection(
     .eq("id", session.current_ticket_id);
 
   await supabase
-    .from("conversation_sessions")
-    .update({ state: "awaiting_payment" }) // 🆕 NEW
+  .from("conversation_sessions")
+  .update({
+    state: "awaiting_payment",
+    expected_input: "payment"
+  })
     .eq("id", session.id);
 
    const paymentUrl = `https://hellofix-api.vercel.app/api/pay?ticket_id=${session.current_ticket_id}`;
@@ -1187,6 +1182,7 @@ async function handlePostPayment(
       .update({
         state: "intake",
         current_ticket_id: null,
+        expected_input: "type_description",
         updated_at: new Date()
       })
       .eq("id", session.id);
