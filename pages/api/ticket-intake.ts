@@ -247,6 +247,19 @@ if (
 ) {
   return routeByState(req, res, effectiveSession, description_raw);
 }
+
+    /* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
+if (!effectiveSession) {
+  effectiveSession = {
+    id: null,                  // not persisted yet
+    condo_id,                  // from coreHandler scope
+    phone_number,              // normalized phone
+    state: "intake",            // default first-contact state
+    current_ticket_id: null,
+    expected_input: "type_description",
+    language: null
+  };
+}
   
 
 /* =====================================================
