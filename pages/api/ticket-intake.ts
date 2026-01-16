@@ -194,7 +194,7 @@ if (ticketId) {
 
   /* ================= 🔁 AUTHORITATIVE SESSION NORMALIZATION (v1.1) ================= */
 
-if (activeTicket.status === "awaiting_payment") {
+if (activeTicket && activeTicket.status === "awaiting_payment") {
   return routeByState(req, res, effectiveSession, description_raw);
 }
   const terminalStatuses = [
@@ -204,7 +204,7 @@ if (activeTicket.status === "awaiting_payment") {
   // ⚠️ DO NOT include "paid" here
 ];
 
-  if (terminalStatuses.includes(activeTicket.status)) {
+  if (activeTicket && terminalStatuses.includes(activeTicket.status)) {
     await supabase
       .from("conversation_sessions")
       .update({
