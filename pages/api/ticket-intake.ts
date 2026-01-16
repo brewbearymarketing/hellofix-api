@@ -214,6 +214,19 @@ if (
   return routeByState(req, res, effectiveSession, description_raw);
   }
 
+  /* ================= 🔒 HARD STOP: MENU REPLY MUST NOT RE-ENTER INTAKE ================= */
+const menuText = normalizeText(description_raw);
+const isMenuReply = ["1", "2", "3"].includes(menuText);
+
+// 🚨 If there is an active ticket, menu replies MUST go through state router ONLY
+if (
+  isMenuReply &&
+  effectiveSession?.current_ticket_id
+) {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
+
+
   /* =====================================================
      ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
 
@@ -233,28 +246,7 @@ if (
 
  /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
 let lang: "en" | "ms" | "zh" | "ta" | null = null;
-    
-/* ================= ❌HARD MENU GUARD (DO NOT MOVE) ================= */
-const menuText = normalizeText(description_raw);
-const isMenuReply = ["1", "2", "3"].includes(menuText);
-
-if (
-  isMenuReply &&
-  !effectiveSession?.current_ticket_id &&
-  conversationState === "intake" && !existingTicket
-) {
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      lockedLang === "ms"
-        ? "⚠️ Tiada tiket aktif ditemui. Sila terangkan masalah penyelenggaraan."
-        : lang === "zh"
-        ? "⚠️ 未检测到有效工单，请重新描述维修问题。"
-        : lang === "ta"
-        ? "⚠️ செயலில் உள்ள டிக்கெட் இல்லை. தயவுசெய்து பிரச்சனையை விவரிக்கவும்."
-        : "⚠️ No active ticket found. Please describe the maintenance issue."
-  });
-}
+  
 
   /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
 
