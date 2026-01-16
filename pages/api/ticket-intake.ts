@@ -147,6 +147,19 @@ const phone_number: string = phone_number_raw;
   .eq("phone_number", phone_number)
   .maybeSingle();
 
+/* ================= 🧠 FETCH EXISTING ACTIVE TICKET ================= */
+let existingTicket = null;
+
+if (session?.current_ticket_id) {
+  const { data } = await supabase
+    .from("tickets")
+    .select("id, language, status")
+    .eq("id", session.current_ticket_id)
+    .maybeSingle();
+
+  existingTicket = data;
+}
+
 /* ================= 🔴🧠 HANDLERS SESSION AUTO-RECOVERY (MANDATORY) ================= */
 let effectiveSession = session;
 
@@ -213,6 +226,13 @@ if (
       "⚠️ You already have an ongoing ticket. Please cancel it before creating a new request."
   });
 }
+
+    /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
+if (
+  ["post_payment", "contractor_assignment", "paid"].includes(conversationState)
+) {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
   
 
 /* =====================================================
@@ -256,15 +276,12 @@ if (
      ❗ DO NOT add state routing here
   ===================================================== */
 
- /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-let lang: "en" | "ms" | "zh" | "ta" | null = null;
-  
-
+     /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
   /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
-
-    if (existingTicket?.language) {
-      lang = existingTicket.language;
-    }
+    let lang: "en" | "ms" | "zh" | "ta" | null =
+      effectiveSession?.language ??
+      existingTicket?.language ??
+      null;
 
     /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
     const hasActiveTicket = !!effectiveSession?.current_ticket_id;
