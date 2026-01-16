@@ -218,11 +218,12 @@ if (activeTicket) {
       })
       .eq("id", effectiveSession?.id);
 
-    effectiveSession = {
-      ...effectiveSession,
-      state: "intake",
-      current_ticket_id: null
-    };
+   effectiveSession = {
+  id: effectiveSession!.id,
+  language: effectiveSession!.language,
+  state: "intake",
+  current_ticket_id: null
+};
   }
 }
 
