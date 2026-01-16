@@ -123,18 +123,18 @@ if (!ticket_id || !gateway_payment_id) {
     }
 
     /* ================= LOAD TICKET ================= */
-  const ticketRes = await supabase
+const ticketRes = await supabase
   .from("tickets")
-  .select("id, condo_id, phone_number, language")
+  .select("id, condo_id, phone_number, language, status")
   .eq("id", ticket_id)
   .maybeSingle();
 
-  if (!ticketRes.data) {
-  throw new Error("Ticket not found");
-  }
+if (!ticketRes.data) {
+  console.warn("⚠️ Ticket not found, skipping WhatsApp");
+  return res.status(200).json({ ok: true });
+}
 
   const ticket = ticketRes.data;
-
 
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
@@ -154,8 +154,8 @@ if (!ticket_id || !gateway_payment_id) {
         status: "paid",
         updated_at: new Date()
       })
-      .eq("id", ticket.id);
-
+      .eq("id", ticket.id)
+      .not("status", "eq", "paid");
 
     /* ================= RESET CONVERSATION ================= */
     await supabase
@@ -186,9 +186,15 @@ if (!ticket_id || !gateway_payment_id) {
     // ✅ CRITICAL: always respond
     return res.status(200).json({ ok: true });
   } catch (err: any) {
-    console.error("🔥 PAYMENT WEBHOOK ERROR:", err);
-    return res.status(500).json({ error: "Payment processing failed" });
-  }
+  console.error("🔥 PAYMENT WEBHOOK ERROR (non-fatal):", err);
+
+  // ⚠️ VERY IMPORTANT:
+  // Stripe payment already succeeded.
+  // Never return 500 or Stripe will retry forever.
+
+  return res.status(200).json({
+    ok: true,
+    warning: "Internal processing failed but payment acknowledged"
+  });
 }
-
-
+}
