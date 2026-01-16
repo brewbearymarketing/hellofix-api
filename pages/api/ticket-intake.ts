@@ -147,22 +147,6 @@ const phone_number: string = phone_number_raw;
   .eq("phone_number", phone_number)
   .maybeSingle();
 
-    /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
-const ticketId = effectiveSession?.current_ticket_id
-  ?? null;
-
-let ticket = null;
-
-if (ticketId) {
-  const { data } = await supabase
-    .from("tickets")
-    .select("*")
-    .eq("id", ticketId)
-    .maybeSingle();
-
-  ticket = data;
-}
-
 /* ================= 🔴🧠 HANDLERS SESSION AUTO-RECOVERY (MANDATORY) ================= */
 let effectiveSession = session;
 
@@ -186,6 +170,21 @@ if (!session && existingTicket) {
 const conversationState =
   effectiveSession?.state ?? "intake";
 
+    /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
+const ticketId = effectiveSession?.current_ticket_id
+  ?? null;
+let ticket = null;
+
+if (ticketId) {
+  const { data } = await supabase
+    .from("tickets")
+    .select("*")
+    .eq("id", ticketId)
+    .maybeSingle();
+
+  ticket = data;
+}
+
   // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
 const lockedLang: "en" | "ms" | "zh" | "ta" =
   effectiveSession?.language ??
@@ -199,7 +198,6 @@ if (
 ) {
   throw new Error("Illegal state: intake with active ticket");
 }
-
     
 /* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
 if (
