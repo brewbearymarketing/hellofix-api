@@ -1225,7 +1225,7 @@ async function handlePostPayment(
   });
 }
 
-// 🆕 SECOND TICKET INTAKE (BANK-GRADE, CLEAN UX)
+// 🆕 SECOND TICKET INTAKE (BANK-GRADE, SILENT HAND-OFF)
 async function handleSecondIntake(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -1233,64 +1233,54 @@ async function handleSecondIntake(
   description_raw: string
 ) {
   const lang = session.language ?? "en";
+  const text = normalizeText(description_raw);
 
-  // 🔒 HARD RULE: numeric replies are NEVER valid here
-  if (/^\d+$/.test(description_raw)) {
+  /* =====================================================
+     🔒 HARD RULE 1: numbers are NEVER valid here
+     (prevents menu bleed-through)
+  ===================================================== */
+  if (/^\d+$/.test(text)) {
     return res.status(200).json({
-      success: true,
-      reply_text:
-        lang === "ms"
-          ? "Sila terangkan masalah penyelenggaraan yang baharu."
-          : lang === "zh"
-          ? "请描述新的维修问题。"
-          : lang === "ta"
-          ? "புதிய பராமரிப்பு பிரச்சனையை விவரிக்கவும்."
-          : "Please describe the new maintenance issue."
+      success: true
+      // ❌ NO reply_text (do not echo, wait for real input)
     });
   }
 
-  // 🔒 No greeting flow, no throttle reuse
-  const meaningful = await aiIsMeaningfulIssue(description_raw);
+  /* =====================================================
+     🔒 HARD RULE 2: must be meaningful maintenance
+     (no greetings, no chatter)
+  ===================================================== */
+  const meaningful = await aiIsMeaningfulIssue(text);
+
   if (!meaningful) {
     return res.status(200).json({
-      success: true,
-      reply_text:
-        lang === "ms"
-          ? "Kami sedia membantu. Sila terangkan isu penyelenggaraan."
-          : lang === "zh"
-          ? "我们可以协助您，请描述维修问题。"
-          : lang === "ta"
-          ? "நாங்கள் உதவ தயாராக உள்ளோம். பராமரிப்பு பிரச்சனையை விவரிக்கவும்."
-          : "We’re ready to help. Please describe the maintenance issue."
+      success: true
+      // ❌ NO reply_text (post-payment already asked user)
     });
   }
 
-  // ✅ VALID — hand off to PRIMARY intake safely
+  /* =====================================================
+     ✅ VALID SECOND TICKET DESCRIPTION
+     → hand back to PRIMARY intake cleanly
+  ===================================================== */
   await supabase
     .from("conversation_sessions")
     .update({
       state: "intake",
+      current_ticket_id: null,
       expected_input: "type_description",
       updated_at: new Date()
     })
     .eq("id", session.id);
 
-  // Re-enter intake cleanly
-  await supabase
-  .from("conversation_sessions")
-  .update({
-    state: "intake",
-    current_ticket_id: null,
-    expected_input: "type_description",
-    updated_at: new Date()
-  })
-  .eq("id", session.id);
-
-// 🔁 re-enter core safely with a CLEAN session
-return coreHandler(req, res, {
-  ...req.body,
-  description_raw
-});
+  /* =====================================================
+     🔁 RE-ENTER CORE HANDLER SAFELY
+     (single source of truth)
+  ===================================================== */
+  return coreHandler(req, res, {
+    ...req.body,
+    description_raw: text
+  });
 }
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
