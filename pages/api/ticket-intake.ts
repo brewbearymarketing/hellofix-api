@@ -186,7 +186,7 @@ const conversationState =
     /* ================= 🧠 HANDLERS FETCH LATEST OPEN TICKET ================= */
 const ticketId = effectiveSession?.current_ticket_id
   ?? null;
-let ticket = null;
+let activeTicket = null;
 
 if (ticketId) {
   const { data } = await supabase
@@ -195,13 +195,14 @@ if (ticketId) {
     .eq("id", ticketId)
     .maybeSingle();
 
-  ticket = data;
+  activeTicket = data;
 }
 
   // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
 const lockedLang: "en" | "ms" | "zh" | "ta" =
   effectiveSession?.language ??
   existingTicket?.language ??
+  activeTicket?.language ??
   detectLanguage(description_raw);
 
   // 🚨 SAFETY ASSERT — MUST NEVER HAPPEN
