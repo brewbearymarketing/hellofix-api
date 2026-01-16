@@ -20,9 +20,6 @@ console.log("OPENAI ENABLED:", !!openai);
 const IS_WEBHOOK = true;
 
 
-/* ================= ⭐PER PHONE EXECUTIION LOCK- removed temporary ================= */
-
-
 /*==============================================================================1. 🧠 HANDLERS =================================================================================================*/
 /* ================= A. INTAKE HANDLER ================= */
 /* =====================================================
@@ -225,6 +222,7 @@ if (activeTicket.status === "awaiting_payment") {
   current_ticket_id: null,
   expected_input: "type_description" // 🔐 REQUIRED
       };
+  }
     /* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
   if (!effectiveSession) {
     effectiveSession = {
