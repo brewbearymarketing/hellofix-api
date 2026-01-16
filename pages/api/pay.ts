@@ -28,9 +28,19 @@ export default async function handler(
     .eq("id", ticket_id)
     .maybeSingle();
 
-  if (!ticket || ticket.status !== "confirmed") {
-    return res.status(400).send("Invalid ticket");
-  }
+ if (!ticket) {
+  return res.status(400).send("Invalid ticket");
+}
+
+// ❌ only block truly impossible states
+if (["cancelled", "cancelled_system"].includes(ticket.status)) {
+  return res.status(400).send("Ticket cancelled");
+}
+
+// 🟢 if already paid, don’t create a new checkout
+if (ticket.status === "paid") {
+  return res.status(200).send("Payment already completed");
+}
 
   const session = await stripe.checkout.sessions.create({
     mode: "payment",
