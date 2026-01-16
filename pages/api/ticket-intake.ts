@@ -906,11 +906,6 @@ async function handlePayment(
       reply_text: buildFollowUpReply(lang, "cancelled")
     }); 
   }
-
-  return res.status(200).json({
-    success: true,
-    reply_text: buildFollowUpReply(lang, "invalid_payment")
-  });
 }
 
 // 🆕 NEW — HANDLE CATEGORY SELECTION
