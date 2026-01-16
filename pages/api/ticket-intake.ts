@@ -197,10 +197,9 @@ if (ticketId) {
 
   /* ================= 🔁 AUTHORITATIVE SESSION NORMALIZATION (v1.1) ================= */
 
-if (activeTicket) {
-   if (activeTicket.status === "awaiting_payment") {
-    return;
-   }
+if (activeTicket.status === "awaiting_payment") {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
   const terminalStatuses = [
   "cancelled",
   "cancelled_system",
@@ -1409,10 +1408,12 @@ function keywordMatch(text: string, keywords: string[]) {
 function isGreetingOnly(text: string): boolean {
   const t = normalizeText(text).toLowerCase();
 
-  // Very short messages are almost always noise
-  if (t.length <= 6) return true;
+  // ✅ NEVER treat numeric replies as greeting
+  if (/^\d+$/.test(t)) return false;
 
-  // Pure greeting
+  // Very short non-numeric messages
+  if (t.length <= 3) return true;
+
   return GREETING_KEYWORDS.some(
     k => t === k || t.startsWith(k + " ")
   );
