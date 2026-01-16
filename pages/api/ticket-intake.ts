@@ -220,7 +220,8 @@ if (activeTicket) {
   id: effectiveSession!.id,
   language: effectiveSession!.language,
   state: "intake",
-  current_ticket_id: null
+  current_ticket_id: null,
+  expected_input: "type_description" // 🔐 REQUIRED
 };
   }
 }
