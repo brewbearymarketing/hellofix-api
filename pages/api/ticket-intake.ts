@@ -840,7 +840,7 @@ async function handleEditCategory(
 
   await supabase
     .from("conversation_sessions")
-    .update({ state: "awaiting_confirmation" });
+    .update({ state: "awaiting_confirmation" })
     .eq("id", session.id);
 
   const label = formatIntentLabel(selected, lang);
