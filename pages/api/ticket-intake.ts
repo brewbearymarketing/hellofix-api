@@ -262,14 +262,7 @@ if (activeTicket.status === "awaiting_payment") {
     return routeByState(req, res, effectiveSession, description_raw);
   }
 
-    } catch (err: any) {
-  console.error("🔥 ERROR:", err);
-  return res.status(500).json({
-    error: "Internal Server Error",
-    detail: err.message
-      });
-    }
-  }
+ 
 
   /* =====================================================
      ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
