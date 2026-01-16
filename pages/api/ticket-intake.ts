@@ -224,6 +224,10 @@ if (
 
      ❗ DO NOT add state routing here
   ===================================================== */
+
+ /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
+let lang: "en" | "ms" | "zh" | "ta" | null = null;
+    
 /* ================= ❌HARD MENU GUARD (DO NOT MOVE) ================= */
 const menuText = normalizeText(description_raw);
 const isMenuReply = ["1", "2", "3"].includes(menuText);
@@ -233,6 +237,7 @@ if (
   !effectiveSession?.current_ticket_id &&
   conversationState === "intake"
 ) {
+  const safeLang = lang ?? detectLanguage(description_raw);
   return res.status(200).json({
     success: true,
     reply_text:
@@ -245,9 +250,6 @@ if (
         : "⚠️ No active ticket found. Please describe the maintenance issue."
   });
 }
-    
-    /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-    let lang: "en" | "ms" | "zh" | "ta" | null = null;
 
   /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
 
