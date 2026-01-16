@@ -198,12 +198,15 @@ if (ticketId) {
   /* ================= 🔁 AUTHORITATIVE SESSION NORMALIZATION (v1.1) ================= */
 
 if (activeTicket) {
+   if (activeTicket.status === "awaiting_payment") {
+    return;
+   }
   const terminalStatuses = [
-    "cancelled",
-    "cancelled_system",
-    "closed",
-    "paid"
-  ];
+  "cancelled",
+  "cancelled_system",
+  "closed"
+  // ⚠️ DO NOT include "paid" here
+];
 
   if (terminalStatuses.includes(activeTicket.status)) {
     await supabase
