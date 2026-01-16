@@ -226,10 +226,25 @@ if (activeTicket) {
   }
 }
 
+/* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
+if (!effectiveSession) {
+  effectiveSession = {
+    id: null,
+    state: "intake",
+    current_ticket_id: null,
+    expected_input: "type_description",
+    language: null
+  };
+}
+
+/* ================= 🧠 FINAL STATE DERIVATION ================= */
+const finalConversationState =
+  effectiveSession.state ?? "intake";
+
+const expectedInput =
+  effectiveSession.expected_input ?? "type_description";
+
 /* ================= 🔐 BANK-GRADE EXPECTED INPUT GATE ================= */
-
-const expectedInput = effectiveSession?.expected_input ?? "type_description";
-
 // 🚫 ABSOLUTE BLOCK: INTAKE IS NEVER RE-ENTERED UNLESS EXPECTED
 if (
   expectedInput !== "type_description" &&
