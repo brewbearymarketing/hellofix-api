@@ -247,12 +247,8 @@ const finalConversationState =
 const expectedInput =
   effectiveSession.expected_input ?? "type_description";
 
-/* ================= 🔐 BANK-GRADE EXPECTED INPUT GATE ================= */
-// 🚫 ABSOLUTE BLOCK: INTAKE IS NEVER RE-ENTERED UNLESS EXPECTED
-if (
-  expectedInput !== "type_description" &&
-  finalConversationState === "intake"
-) {
+/* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
+if (effectiveSession.current_ticket_id) {
   return routeByState(req, res, effectiveSession, description_raw);
 }
 
