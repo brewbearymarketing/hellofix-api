@@ -226,7 +226,14 @@ if (activeTicket.status === "awaiting_payment") {
   expected_input: "type_description" // 🔐 REQUIRED
       };
     }
+    catch (err: any) {
+    console.error("🔥 ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
   }
+}
 }
 
 /* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
