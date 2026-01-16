@@ -226,10 +226,14 @@ if (activeTicket) {
   }
 }
 
+    const finalConversationState =
+  effectiveSession?.state ?? "intake";
+
+
  /* ================= 🔒 HARD GUARD: INTAKE ONLY IF NO ACTIVE TICKET (v1.1) ================= */
 
 if (
-  conversationState === "intake" &&
+  finalConversationState === "intake" &&
   effectiveSession?.current_ticket_id
 ) {
   return routeByState(req, res, effectiveSession, description_raw);
@@ -245,14 +249,14 @@ const lockedLang: "en" | "ms" | "zh" | "ta" =
   // 🚨 SAFETY ASSERT — MUST NEVER HAPPEN
 if (
   effectiveSession?.current_ticket_id &&
-  conversationState === "intake"
+  finalConversationState === "intake"
 ) {
-  throw new Error("Illegal state: intake with active ticket");
+  return routeByState(req, res, effectiveSession, description_raw);
 }
     
 /* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
 if (
-  conversationState === "intake" &&
+  finalConversationState === "intake" &&
   effectiveSession?.state &&
   ["draft_edit", "edit_menu", "edit_category", "awaiting_payment"].includes(
     effectiveSession.state
@@ -267,7 +271,7 @@ if (
 
     /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
 if (
-  ["post_payment", "contractor_assignment", "paid"].includes(conversationState)
+  ["post_payment", "contractor_assignment", "paid"].includes(finalConversationState)
 ) {
   return routeByState(req, res, effectiveSession, description_raw);
 }
@@ -280,7 +284,7 @@ if (
      - NO GUESSING
   ===================================================== */
 
-  if (conversationState !== "intake") {
+  if (finalConversationState !== "intake") {
   return routeByState(req, res, effectiveSession, description_raw);
   }
 
@@ -338,7 +342,7 @@ if (
   }
 
 
-    if (throttle.level === "soft" && conversationState === "intake" &&
+    if (throttle.level === "soft" && finalConversationState === "intake" &&
   !effectiveSession?.current_ticket_id &&
   !isMenuReply) {
       const meaningful = await aiIsMeaningfulIssue(description_raw);
@@ -355,7 +359,7 @@ if (
     /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
 if (
   !isMenuReply &&
-  conversationState === "intake" &&
+  finalConversationState === "intake" &&
   !effectiveSession?.current_ticket_id &&
   isGreetingOnly(description_raw)
 ) {
@@ -391,7 +395,7 @@ return res.status(200).json({
 }
     
    /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
-if (conversationState === "intake" && !isMenuReply) {
+if (finalConversationState === "intake" && !isMenuReply) {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
