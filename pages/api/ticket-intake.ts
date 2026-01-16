@@ -228,11 +228,21 @@ if (
 const menuText = normalizeText(description_raw);
 const isMenuReply = ["1", "2", "3"].includes(menuText);
 
-if (isMenuReply && !effectiveSession?.current_ticket_id) {
+if (
+  isMenuReply &&
+  !effectiveSession?.current_ticket_id &&
+  conversationState === "intake"
+) {
   return res.status(200).json({
     success: true,
     reply_text:
-      "⚠️ Sesi anda telah tamat. Sila hantar semula masalah penyelenggaraan."
+      lang === "ms"
+        ? "⚠️ Tiada tiket aktif ditemui. Sila terangkan masalah penyelenggaraan."
+        : lang === "zh"
+        ? "⚠️ 未检测到有效工单，请重新描述维修问题。"
+        : lang === "ta"
+        ? "⚠️ செயலில் உள்ள டிக்கெட் இல்லை. தயவுசெய்து பிரச்சனையை விவரிக்கவும்."
+        : "⚠️ No active ticket found. Please describe the maintenance issue."
   });
 }
     
