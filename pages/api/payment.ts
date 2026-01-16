@@ -64,10 +64,9 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  
- if (req.method !== "POST") {
-  return res.status(200).json({ ignored: true });
-}
+  if (req.method !== "POST") {
+    return res.status(200).json({ ignored: true });
+  }
 
   let event: Stripe.Event;
 
@@ -81,65 +80,57 @@ export default async function handler(
       process.env.STRIPE_WEBHOOK_SECRET!
     );
   } catch (err: any) {
-    console.error("❌ Stripe signature verification failed:", err.message);
+    console.error("❌ Stripe signature failed:", err.message);
     return res.status(400).send("Webhook Error");
   }
 
-  /* ================= HANDLE SUCCESS EVENTS ================= */
-let gateway_payment_id: string;
-let ticket_id: string;
-let amount: number;
+  /* ================= ACCEPT ONLY PAID CHECKOUT ================= */
+  if (event.type !== "checkout.session.completed") {
+    return res.status(200).json({ ignored: true });
+  }
 
-if (event.type !== "checkout.session.completed") {
-  return res.status(200).json({ ignored: true });
-}
+  const session = event.data.object as Stripe.Checkout.Session;
 
-const session = event.data.object as Stripe.Checkout.Session;
+  if (session.payment_status !== "paid") {
+    return res.status(200).json({ ignored: true });
+  }
 
-// ✅ Stripe guarantee: checkout completed + paid
-if (session.payment_status !== "paid") {
-  return res.status(200).json({ ignored: true });
-}
+  const gateway_payment_id = session.payment_intent as string;
+  const ticket_id = session.metadata?.ticket_id;
+  const amount = (session.amount_total ?? 0) / 100;
 
-gateway_payment_id = session.payment_intent as string;
-ticket_id = session.metadata?.ticket_id!;
-amount = (session.amount_total ?? 0) / 100;
+  if (!ticket_id || !gateway_payment_id) {
+    return res.status(200).json({ ignored: true });
+  }
 
-if (!ticket_id || !gateway_payment_id) {
-  console.error("❌ Missing ticket_id or payment_intent");
-  return res.status(200).json({ ignored: true });
-}
-
-    /* ================= IDEMPOTENCY CHECK ================= */
-   try {
-     const { data: existing } = await supabase
+  try {
+    /* ================= IDEMPOTENCY ================= */
+    const { data: existing } = await supabase
       .from("payments")
       .select("id")
       .eq("gateway_payment_id", gateway_payment_id)
       .maybeSingle();
 
     if (existing) {
+      // ⚠️ DO NOT SEND WHATSAPP AGAIN
       return res.status(200).json({ ok: true, duplicate: true });
     }
 
     /* ================= LOAD TICKET ================= */
-const ticketRes = await supabase
-  .from("tickets")
-  .select("id, condo_id, phone_number, language, status")
-  .eq("id", ticket_id)
-  .maybeSingle();
+    const { data: ticket } = await supabase
+      .from("tickets")
+      .select("id, condo_id, phone_number, language")
+      .eq("id", ticket_id)
+      .maybeSingle();
 
-if (!ticketRes.data) {
-  console.warn("⚠️ Ticket not found, skipping WhatsApp");
-  return res.status(200).json({ ok: true });
-}
-
-  const ticket = ticketRes.data;
+    if (!ticket) {
+      return res.status(200).json({ ok: true });
+    }
 
     /* ================= INSERT PAYMENT ================= */
     await supabase.from("payments").insert({
       ticket_id: ticket.id,
-      gateway_payment_id: gateway_payment_id,
+      gateway_payment_id,
       amount,
       currency: "MYR",
       status: "paid",
@@ -154,10 +145,9 @@ if (!ticketRes.data) {
         status: "paid",
         updated_at: new Date()
       })
-      .eq("id", ticket.id)
-      .not("status", "eq", "paid");
+      .eq("id", ticket.id);
 
-    /* ================= RESET CONVERSATION ================= */
+    /* ================= UPDATE CONVERSATION ================= */
     await supabase
       .from("conversation_sessions")
       .update({
@@ -167,34 +157,22 @@ if (!ticketRes.data) {
       .eq("condo_id", ticket.condo_id)
       .eq("phone_number", ticket.phone_number);
 
-    /* ================= SEND WHATSAPP ================= */
-    try {
-      await sendWhatsApp(
-        ticket.phone_number,
-        ticket.language === "ms"
-          ? "✅ Pembayaran berjaya diterima.\n\nKontraktor sedang ditugaskan. Anda akan dimaklumkan sebelum lawatan."
-          : ticket.language === "zh"
-          ? "✅ 付款成功。\n\n正在分配承包商，稍后将与您联系。"
-          : ticket.language === "ta"
-          ? "✅ கட்டணம் வெற்றிகரமாக பெறப்பட்டது.\n\nஒப்பந்ததாரர் நியமிக்கப்படுகிறார்."
-          : "✅ Payment received.\n\nA contractor is being assigned. You will be contacted shortly."
-      );
-    } catch (err) {
-      console.error("⚠️ WhatsApp send failed:", err);
-    }
+    /* ================= SEND WHATSAPP (ONLY HERE) ================= */
+    await sendWhatsApp(
+      ticket.phone_number,
+      ticket.language === "ms"
+        ? "✅ Pembayaran berjaya diterima.\n\nKontraktor sedang ditugaskan. Anda akan dimaklumkan melalui WhatsApp."
+        : ticket.language === "zh"
+        ? "✅ 付款成功。\n\n正在分配承包商，您将通过 WhatsApp 收到通知。"
+        : ticket.language === "ta"
+        ? "✅ கட்டணம் பெறப்பட்டது.\n\nஒப்பந்ததாரர் நியமிக்கப்படுகிறார்."
+        : "✅ Payment received.\n\nA contractor is being assigned. You will be notified via WhatsApp."
+    );
 
-    // ✅ CRITICAL: always respond
     return res.status(200).json({ ok: true });
   } catch (err: any) {
-  console.error("🔥 PAYMENT WEBHOOK ERROR (non-fatal):", err);
-
-  // ⚠️ VERY IMPORTANT:
-  // Stripe payment already succeeded.
-  // Never return 500 or Stripe will retry forever.
-
-  return res.status(200).json({
-    ok: true,
-    warning: "Internal processing failed but payment acknowledged"
-  });
-}
+    console.error("🔥 PAYMENT WEBHOOK ERROR (non-fatal):", err);
+    // IMPORTANT: never return 500
+    return res.status(200).json({ ok: true });
+  }
 }
