@@ -1276,11 +1276,21 @@ async function handleSecondIntake(
     .eq("id", session.id);
 
   // Re-enter intake cleanly
-  return routeByState(req, res, {
-  ...session,
-  state: "intake",
-  expected_input: "type_description"
-}, description_raw);
+  await supabase
+  .from("conversation_sessions")
+  .update({
+    state: "intake",
+    current_ticket_id: null,
+    expected_input: "type_description",
+    updated_at: new Date()
+  })
+  .eq("id", session.id);
+
+// 🔁 re-enter core safely with a CLEAN session
+return coreHandler(req, res, {
+  ...req.body,
+  description_raw
+});
 }
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
