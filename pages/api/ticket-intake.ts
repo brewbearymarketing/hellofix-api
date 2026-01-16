@@ -524,9 +524,11 @@ async function routeByState(
     case "awaiting_schedule":
       return handleScheduleSelection(req, res, session,description_raw);
 
+    case "post_payment":
     case "contractor_assignment":
     case "paid":
       return handlePostPayment(req, res, session, description_raw);
+
 
     case "closed":
       return res.status(200).json({ success: true });
@@ -839,7 +841,7 @@ async function handleEditCategory(
   await supabase
     .from("conversation_sessions")
     .update({ state: "awaiting_confirmation" });
-
+    .eq("id", session.id);
 
   const label = formatIntentLabel(selected, lang);
 
