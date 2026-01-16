@@ -159,7 +159,7 @@ if (session?.current_ticket_id) {
 
   existingTicket = data;
 }
-
+    
 /* ================= 🔴🧠 HANDLERS SESSION AUTO-RECOVERY (MANDATORY) ================= */
 let effectiveSession = session;
 
@@ -198,7 +198,44 @@ if (ticketId) {
   activeTicket = data;
 }
 
-  // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
+  /* ================= 🔁 AUTHORITATIVE SESSION NORMALIZATION (v1.1) ================= */
+
+if (activeTicket) {
+  const terminalStatuses = [
+    "cancelled",
+    "cancelled_system",
+    "closed",
+    "paid"
+  ];
+
+  if (terminalStatuses.includes(activeTicket.status)) {
+    await supabase
+      .from("conversation_sessions")
+      .update({
+        state: "intake",
+        current_ticket_id: null,
+        updated_at: new Date()
+      })
+      .eq("id", effectiveSession?.id);
+
+    effectiveSession = {
+      ...effectiveSession,
+      state: "intake",
+      current_ticket_id: null
+    };
+  }
+}
+
+ /* ================= 🔒 HARD GUARD: INTAKE ONLY IF NO ACTIVE TICKET (v1.1) ================= */
+
+if (
+  conversationState === "intake" &&
+  effectiveSession?.current_ticket_id
+) {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
+
+    // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
 const lockedLang: "en" | "ms" | "zh" | "ta" =
   effectiveSession?.language ??
   existingTicket?.language ??
@@ -249,7 +286,7 @@ if (
 
   /* ================= 🔒 HARD STOP: MENU REPLY MUST NOT RE-ENTER INTAKE ================= */
 const menuText = normalizeText(description_raw);
-const isMenuReply = ["1", "2", "3"].includes(menuText);
+const isMenuReply = /^[0-9]+$/.test(menuText);
 
 // 🚨 If there is an active ticket, menu replies MUST go through state router ONLY
 if (
