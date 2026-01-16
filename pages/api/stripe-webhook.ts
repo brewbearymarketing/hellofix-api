@@ -145,13 +145,25 @@ export default async function handler(
     /* ===== LOAD TICKET ===== */
     const { data: ticket } = await supabase
       .from("tickets")
-      .select("id, condo_id, phone_number, language")
+      .select("id, condo_id")
       .eq("id", ticketId)
       .maybeSingle();
 
     if (!ticket) {
       throw new Error("Ticket not found");
     }
+
+     /* ===== LOAD SESSION ===== */
+    const { data: session } = await supabase
+  .from("conversation_sessions")
+  .select("phone_number, language")
+  .eq("condo_id", ticket.condo_id)
+  .eq("current_ticket_id", ticket.id)
+  .maybeSingle();
+
+if (!session) {
+  throw new Error("Conversation session not found");
+}
 
     /* ===== SAVE PAYMENT ===== */
     await supabase.from("payments").insert({
@@ -173,7 +185,7 @@ export default async function handler(
     /* ===== SEND WHATSAPP (LANG LOCKED) ===== */
     try {
       await sendWhatsApp(
-        ticket.phone_number,
+        session.phone_number,
         paymentSuccessText(ticket.language || "en")
       );
     } catch (waErr) {
