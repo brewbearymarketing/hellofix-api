@@ -119,7 +119,7 @@ export default async function handler(
 
   const checkoutSession = event.data.object as Stripe.Checkout.Session;
 
-  if (CheckoutSession.payment_status !== "paid") {
+  if (checkoutSession.payment_status !== "paid") {
     return res.status(200).json({ ignored: true });
   }
 
