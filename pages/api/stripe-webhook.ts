@@ -117,14 +117,17 @@ export default async function handler(
     return res.status(200).json({ ignored: true });
   }
 
-  const session = event.data.object as Stripe.Checkout.Session;
+  const checkoutSession = event.data.object as Stripe.Checkout.Session;
 
-  if (session.payment_status !== "paid") {
+  if (CheckoutSession.payment_status !== "paid") {
     return res.status(200).json({ ignored: true });
   }
 
   const paymentId = session.payment_intent as string;
   const ticketId = session.metadata?.ticket_id;
+
+  const amount =
+  (checkoutSession.amount_total ?? 0) / 100;
 
   if (!paymentId || !ticketId) {
     return res.status(200).json({ ignored: true });
@@ -154,7 +157,7 @@ export default async function handler(
     }
 
      /* ===== LOAD SESSION ===== */
-    const { data: session } = await supabase
+    const { data: convSession } = await supabase
   .from("conversation_sessions")
   .select("phone_number, language")
   .eq("condo_id", ticket.condo_id)
@@ -169,7 +172,7 @@ if (!session) {
     await supabase.from("payments").insert({
       ticket_id: ticket.id,
       gateway_payment_id: paymentId,
-      amount: (session.amount_total ?? 0) / 100,
+      amount,
       currency: "MYR",
       status: "paid",
       provider: "stripe",
@@ -185,8 +188,8 @@ if (!session) {
     /* ===== SEND WHATSAPP (LANG LOCKED) ===== */
     try {
       await sendWhatsApp(
-        session.phone_number,
-        paymentSuccessText(ticket.language || "en")
+        convSession.phone_number,
+        paymentSuccessText(convSession.language || "en")
       );
     } catch (waErr) {
       console.error("⚠️ WhatsApp failed:", waErr);
