@@ -246,29 +246,6 @@ const lockedLang: "en" | "ms" | "zh" | "ta" =
   activeTicket?.language ??
   detectLanguage(description_raw);
 
-  // 🚨 SAFETY ASSERT — MUST NEVER HAPPEN
-if (
-  effectiveSession?.current_ticket_id &&
-  finalConversationState === "intake"
-) {
-  return routeByState(req, res, effectiveSession, description_raw);
-}
-    
-/* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
-if (
-  finalConversationState === "intake" &&
-  effectiveSession?.state &&
-  ["draft_edit", "edit_menu", "edit_category", "awaiting_payment"].includes(
-    effectiveSession.state
-  )
-) {
-  return res.status(200).json({
-    success: true,
-    reply_text:
-      "⚠️ You already have an ongoing ticket. Please cancel it before creating a new request."
-  });
-}
-
     /* ================= 🔒 HARD STOP — POST PAYMENT ================= */
 if (
   ["post_payment", "contractor_assignment", "paid"].includes(finalConversationState)
