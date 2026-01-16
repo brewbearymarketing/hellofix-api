@@ -243,6 +243,13 @@ if (activeTicket.status === "awaiting_payment") {
   const expectedInput =
     effectiveSession.expected_input ?? "type_description";
 
+   if (
+  finalConversationState !== "intake" ||
+  effectiveSession?.expected_input !== "type_description"
+) {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
+
   /* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
   if (effectiveSession.current_ticket_id) {
     return routeByState(req, res, effectiveSession, description_raw);
@@ -254,7 +261,8 @@ if (activeTicket.status === "awaiting_payment") {
   ) {
     return routeByState(req, res, effectiveSession, description_raw);
   }
-} catch (err: any) {
+
+    } catch (err: any) {
   console.error("🔥 ERROR:", err);
   return res.status(500).json({
     error: "Internal Server Error",
@@ -262,20 +270,6 @@ if (activeTicket.status === "awaiting_payment") {
       });
     }
   }
-
-/* =====================================================
-     🔁 SINGLE STATE ROUTE (NON-INTAKE)
-     - NO THROTTLE
-     - NO AI
-     - NO GUESSING
-  ===================================================== */
-
- if (
-  finalConversationState !== "intake" ||
-  effectiveSession?.expected_input !== "type_description"
-) {
-  return routeByState(req, res, effectiveSession, description_raw);
-}
 
   /* =====================================================
      ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
