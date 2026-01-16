@@ -180,6 +180,12 @@ if (!session && existingTicket) {
 
 const conversationState =
   effectiveSession?.state ?? "intake";
+
+  // 🔒 AUTHORITATIVE LANGUAGE (SESSION → TICKET → DETECT)
+const lockedLang: "en" | "ms" | "zh" | "ta" =
+  effectiveSession?.language ??
+  existingTicket?.language ??
+  detectLanguage(description_raw);
     
 /* ================= 🆕 BLOCK NEW TICKET IF EXISTING ACTIVE ================= */
 if (
@@ -235,13 +241,12 @@ const isMenuReply = ["1", "2", "3"].includes(menuText);
 if (
   isMenuReply &&
   !effectiveSession?.current_ticket_id &&
-  conversationState === "intake"
+  conversationState === "intake" && !existingTicket
 ) {
-  const safeLang = lang ?? detectLanguage(description_raw);
   return res.status(200).json({
     success: true,
     reply_text:
-      lang === "ms"
+      lockedLang === "ms"
         ? "⚠️ Tiada tiket aktif ditemui. Sila terangkan masalah penyelenggaraan."
         : lang === "zh"
         ? "⚠️ 未检测到有效工单，请重新描述维修问题。"
