@@ -64,26 +64,37 @@ function paymentSuccessText(lang: string) {
     case "ms":
       return (
         "✅ Pembayaran berjaya diterima.\n\n" +
-        "Kontraktor sedang ditugaskan.\n" +
-        "Anda akan dimaklumkan melalui WhatsApp sebelum lawatan."
+        "🔧 Tiket penyelenggaraan anda sedang diproses dan kontraktor sedang ditugaskan.\n" +
+        "Kami akan memaklumkan anda melalui WhatsApp sebelum lawatan dibuat.\n\n" +
+        "➕ Perlu laporkan masalah lain?\n" +
+        "Balas *NEW* untuk hantar tiket baharu."
       );
+
     case "zh":
       return (
-        "✅ 付款成功。\n\n" +
-        "承包商正在分配中。\n" +
-        "我们将通过 WhatsApp 通知您。"
+        "✅ 付款已成功完成。\n\n" +
+        "🔧 您的维修工单正在处理中，承包商正在分配中。\n" +
+        "在上门前，我们会通过 WhatsApp 通知您。\n\n" +
+        "➕ 需要提交新的维修问题？\n" +
+        "请回复 *NEW* 创建新的工单。"
       );
+
     case "ta":
       return (
         "✅ கட்டணம் வெற்றிகரமாக பெறப்பட்டது.\n\n" +
-        "ஒப்பந்ததாரர் நியமிக்கப்படுகிறார்.\n" +
-        "WhatsApp மூலம் தகவல் வழங்கப்படும்."
+        "🔧 உங்கள் பராமரிப்பு டிக்கெட் செயல்பாட்டில் உள்ளது, ஒப்பந்ததாரர் நியமிக்கப்படுகிறார்.\n" +
+        "வருகைக்கு முன் WhatsApp மூலம் உங்களுக்கு அறிவிக்கப்படும்.\n\n" +
+        "➕ மற்றொரு பிரச்சனையை பதிவு செய்ய வேண்டுமா?\n" +
+        "*NEW* என்று பதிலளிக்கவும்."
       );
+
     default:
       return (
         "✅ Payment received successfully.\n\n" +
-        "A contractor is being assigned.\n" +
-        "You will be notified via WhatsApp."
+        "🔧 Your maintenance ticket is being processed and a contractor is being assigned.\n" +
+        "You’ll be notified via WhatsApp before the visit.\n\n" +
+        "➕ Need to report another issue?\n" +
+        "Reply *NEW* to create a new ticket."
       );
   }
 }
