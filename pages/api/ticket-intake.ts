@@ -886,13 +886,6 @@ async function handlePayment(
   const ticketId = session.current_ticket_id;
   const lang = session.language ?? "en";
 
-  if (text === "PAY") {
-    return res.status(200).json({
-      success: true,
-      reply_text: buildFollowUpReply(lang, "payment_prompt")
-    });
-  }
-
   if (text === "CANCEL") {
     await supabase
       .from("tickets")
