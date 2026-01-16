@@ -260,20 +260,6 @@ if (
   return routeByState(req, res, effectiveSession, description_raw);
 }
 
-    /* ================= 🔒 GUARANTEE SESSION OBJECT (WORKER SAFE) ================= */
-if (!effectiveSession) {
-  effectiveSession = {
-    id: null,                  // not persisted yet
-    state: "intake",            // default first-contact state
-    current_ticket_id: null,
-    expected_input: "type_description",
-    language: null
-  };
-}
-
-        const finalConversationState =
-  effectiveSession?.state ?? "intake";  
-
 /* =====================================================
      🔁 SINGLE STATE ROUTE (NON-INTAKE)
      - NO THROTTLE
@@ -732,13 +718,12 @@ async function handleEditMenu(
 
   if (text === "2") {
     await supabase
-      .from("conversation_sessions")
-      .update({ state: "edit_category", 
-       expected_input: "edit_category"})
-      .eq("condo_id", session.condo_id)
-      .eq("id", session.id)
-      .eq("phone_number", session.phone_number);
-
+  .from("conversation_sessions")
+  .update({
+    state: "edit_category",
+    expected_input: "edit_category"
+  })
+  .eq("id", session.id);
 
     return res.status(200).json({
       success: true,
