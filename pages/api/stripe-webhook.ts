@@ -185,6 +185,18 @@ if (!convSession) {
       .update({ status: "paid" })
       .eq("id", ticket.id);
 
+    /* ===== UPDATE CONVERSATION STATE (POST PAYMENT) ===== */
+await supabase
+  .from("conversation_sessions")
+  .update({
+    state: "post_payment",
+    current_ticket_id: null,
+    updated_at: new Date()
+  })
+  .eq("condo_id", ticket.condo_id)
+  .eq("phone_number", convSession.phone_number);
+
+
     /* ===== SEND WHATSAPP (LANG LOCKED) ===== */
     try {
       await sendWhatsApp(
