@@ -224,7 +224,8 @@ if (activeTicket.status === "awaiting_payment") {
   state: "intake",
   current_ticket_id: null,
   expected_input: "type_description" // 🔐 REQUIRED
-};
+      };
+    }
   }
 }
 
