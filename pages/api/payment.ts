@@ -39,17 +39,24 @@ async function sendWhatsApp(phone_number: string, message: string) {
     return;
   }
 
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  const to =
+    phone_number.startsWith("whatsapp:")
+      ? phone_number
+      : `whatsapp:${phone_number}`;
 
+  console.log("📤 WhatsApp send", { to, from });
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  
   const body = new URLSearchParams({
     From: from,
-    To: `whatsapp:${phone_number}`,
+    To: to,
     Body: message
   });
 
   const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
 
-  await fetch(url, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
@@ -57,6 +64,8 @@ async function sendWhatsApp(phone_number: string, message: string) {
     },
     body
   });
+const text = await res.text();
+  console.log("📨 Twilio response:", res.status, text);
 }
 
 /* ================= API HANDLER ================= */
