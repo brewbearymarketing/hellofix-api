@@ -1859,7 +1859,7 @@ async function handleContractorAssignment(
   description_raw: string
 ) {
 
-  if (IS_WEBHOOK) {
+  if (mode === "whatsapp") {
     // 🚀 Defer contractor assignment to cron / webhook / manual trigger
     return res.status(200).json({ success: true });
   }
@@ -2064,8 +2064,6 @@ async function intakeEngine(
       null;
 
     /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
-    const hasActiveTicket = !!effectiveSession?.current_ticket_id;
-
  const throttle = await checkThrottle(condo_id, phone_number);
 
 if (!throttle.allowed) {
@@ -2250,4 +2248,3 @@ const description_display =
     });
       }
     }
-  }
