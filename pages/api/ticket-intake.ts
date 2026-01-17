@@ -370,7 +370,8 @@ return res.status(200).json({
 }
     
    /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
-if (finalConversationState === "intake") {
+if (finalConversationState === "intake" &&
+  effectiveSession?.expected_input === "type_description") {
   const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
 
   if (!hasMeaningfulIntent) {
