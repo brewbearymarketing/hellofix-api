@@ -1097,8 +1097,14 @@ export async function coreHandler(
   body: any
 ): Promise<void> {
   try{
-  const condo_id = body.condo_id;
-  const originalBody = body;
+  const effectiveBody = body ?? req.body;
+const condo_id = effectiveBody?.condo_id;
+
+if (!condo_id) {
+  return res.status(200).json({ success: true });
+}
+
+  const originalBody = effectiveBody;
 
   // 🔒 AUTHORITATIVE NORMALIZATION (CORE)
 const phone_number_raw = normalizeWhatsappPhone(body.phone_number);
