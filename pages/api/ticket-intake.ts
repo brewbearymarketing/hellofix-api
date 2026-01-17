@@ -21,14 +21,14 @@ const IS_WEBHOOK = true;
 
 
 /*==============================================================================1. 🧠 HANDLERS =================================================================================================*/
-/* ================= A. INTAKE HANDLER ================= */
-/* =====================================================
+/* ===========================================================================================================================================================================================
+   A. INTAKE HANDLER WEBHOOK
    🧠 ROOT HANDLER (ENTRY POINT)
    - NO BUSINESS LOGIC
    - NO STATE ROUTING
    - NO AI
    - WEBHOOK
-===================================================== */
+============================================================================================================================================================================================== */
 
 export default async function handler(
   req: NextApiRequest,
@@ -105,13 +105,13 @@ return res.status(200).json({ success: true });
 
 }
 
-/* =====================================================
+/* ==============================================================================================================================================================================
   🧠 CORE HANDLER
    - Fetch session
    - Recover session
    - Decide: intake vs non-intake
    - Route state ONCE
-===================================================== */
+=================================================================================================================================================================================== */
 export async function coreHandler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -248,7 +248,7 @@ if (
   const finalConversationState =
     effectiveSession.state ?? "intake";
 
-  // 🆕 SECOND TICKET INTAKE PIPELINE
+  // SECOND TICKET INTAKE PIPELINE
 if (finalConversationState === "intake_v2") {
   return handleSecondIntake(req, res, effectiveSession, description_raw, originalBody);
 }
@@ -258,10 +258,18 @@ if (finalConversationState === "intake_v2") {
 
 // PRIMARY INTAKE (FIRST TICKET ONLY)
 if (
-  finalConversationState !== "intake" ||
-  effectiveSession?.expected_input !== "type_description"
+  finalConversationState === "intake" &&
+  effectiveSession?.expected_input === "type_description" &&
+  !effectiveSession.current_ticket_id
 ) {
-  return routeByState(req, res, effectiveSession, description_raw);
+  return intakeEngine(req, res, {
+    condo_id,
+    phone_number,
+    description_raw,
+    session: effectiveSession,
+    existingTicket,
+    mode: "whatsapp"
+  });
 }
 
   /* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
@@ -276,281 +284,8 @@ if (
     return routeByState(req, res, effectiveSession, description_raw);
   }
 
- 
-
-  /* =====================================================
-     ⬇⬇⬇ INTAKE LOGIC (YOUR EXISTING v6 CODE) ⬇⬇⬇
-
-     MOVE YOUR CURRENT INTAKE CODE HERE, UNCHANGED:
-     - throttle
-     - greeting guards
-     - meaningful intent
-     - language lock
-     - resident verification
-     - intent detection
-     - ticket creation
-     - embedding + duplicate
-     - reply_text
-
-     ❗ DO NOT add state routing here
-  ===================================================== */
-
-     /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-  /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
-    let lang: "en" | "ms" | "zh" | "ta" | null =
-      effectiveSession?.language ??
-      existingTicket?.language ??
-      null;
-
-    /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
-    const hasActiveTicket = !!effectiveSession?.current_ticket_id;
-
-  const throttle = hasActiveTicket
-  ? { allowed: true, level: "ok", count: 1 }
-  : await checkThrottle(condo_id, phone_number);
-
-    if (!throttle.allowed) {
-    const tempLang = lang ?? detectLanguage(description_raw);
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildThrottleNotice(tempLang)
-    });
-  }
-
-
-    if (throttle.level === "soft" && finalConversationState === "intake" &&
-  !effectiveSession?.current_ticket_id) {
-      const meaningful = await aiIsMeaningfulIssue(description_raw);
-      if (!meaningful) {
-        const tempLang = lang ?? detectLanguage(description_raw);
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          reply_text: buildReplyText(tempLang, "greeting")
-        });
-      }
-    }
-
-    /* ===== GREETING SHORT-CIRCUIT (ONCE PER WINDOW) ===== */
-if (
-  finalConversationState === "intake" &&
-  !effectiveSession?.current_ticket_id &&
-  isGreetingOnly(description_raw)
-) {
-
-  const tempLang = lang ?? detectLanguage(description_raw);
-
-  // First message only → greeting
-  if (throttle.count === 1) {
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(tempLang, "greeting")
-    });
-  }
-
-  // Second greeting → soft nudge
-if (throttle.count === 2) {
-  return res.status(200).json({
-    success: true,
-    ignored: true,
-    reply_text: buildReplyText(tempLang, "greeting_soft")
-  });
-}
-
-// Third+ greeting → firm but polite
-if (throttle.count === 3) {
-return res.status(200).json({
-  success: true,
-  ignored: true,
-  reply_text: buildReplyText(tempLang, "greeting_firm")
-});
-}
-}
-    
-   /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
-if (finalConversationState === "intake" &&
-  effectiveSession?.expected_input === "type_description") {
-  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
-
-  if (!hasMeaningfulIntent) {
-    const tempLang = lang ?? detectLanguage(description_raw);
-    return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text: buildReplyText(tempLang, "non_maintenance")
-    });
-  }
-  }
-
-    /* ===== 🔴 🧠LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
-    lang = await aiDetectLanguage(description_raw);
-
-        const description_clean = await aiCleanDescription(description_raw);
-
-const description_display =
-  lang === "en"
-    ? description_clean
-    : await aiTranslateForDisplay(description_clean, lang);
-
-
-       /* ===== 🧠 VERIFY RESIDENT ===== */
-    const { data: resident } = await supabase
-      .from("residents")
-      .select("unit_id, approved")
-      .eq("condo_id", condo_id)
-      .eq("phone_number", phone_number)
-      .maybeSingle();
-
-    if (!resident || !resident.approved) {
-      return res.status(200).json({
-      success: true,
-      ignored: true,
-      reply_text:
-        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
-});
-
-    }
-
-    const unit_id = resident.unit_id;
-
-    /* ===== INTENT DETECTION ===== */
-    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
-      "uncertain";
-    let intent_source: "keyword" | "ai" | "none" = "none";
-    let intent_confidence = 1;
-
-    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
-    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
-    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
-
-    if (commonHit && unitHit) {
-      intent_category = "mixed";
-      intent_source = "keyword";
-    } else if (commonHit && !ambiguousHit) {
-      intent_category = "common_area";
-      intent_source = "keyword";
-    } else if (unitHit && !ambiguousHit) {
-      intent_category = "unit";
-      intent_source = "keyword";
-    } else {
-      const ai = await aiClassify(description_raw);
-      if (ai.confidence >= 0.7) {
-        intent_category = ai.category;
-        intent_confidence = ai.confidence;
-        intent_source = "ai";
-      }
-    }
-
-    /* ===== 🧠 CREATE TICKET ===== */
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
-        condo_id,
-        unit_id: intent_category === "unit" ? unit_id : null,
-        description_raw,
-        description_clean,
-        source: "whatsapp",
-        status: "new",
-        is_common_area: intent_category === "common_area",
-        intent_category,
-        intent_source,
-        intent_confidence,
-        diagnosis_fee: intent_category === "unit" ? 30 : 0,
-        language: lang
-      })
-      .select()
-      .single();
-
-      if (error || !ticket) throw error;
-    
-/* ===== 🔒 SET CONVERSATION STATE AFTER INTAKE ===== */
-   await supabase
-    .from("conversation_sessions")
-    .upsert({
-      condo_id,
-      phone_number,
-      current_ticket_id: ticket.id,
-      state: "awaiting_confirmation",
-      expected_input: "confirm_menu", // 🔐 LOCK
-      language: lang,
-      updated_at: new Date()
-  });
-
-    /* ===== 🧠 EMBEDDING + DUPLICATE ===== */
-    if (!IS_WEBHOOK && openai && description_clean) {
-      const emb = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: description_clean
-      });
-
-      const embedding = emb.data[0].embedding;
-
-      await supabase
-        .from("tickets")
-        .update({ embedding })
-        .eq("id", ticket.id);
-
-      const { data: relation } = await supabase.rpc(
-        "detect_ticket_relation",
-        {
-          query_embedding: embedding,
-          condo_filter: condo_id,
-          ticket_unit_id: ticket.unit_id,
-          ticket_is_common_area: ticket.is_common_area,
-          exclude_id: ticket.id,
-          similarity_threshold: 0.85
-        }
-      );
-
-      if (relation?.length) {
-        const r = relation[0];
-
-        await supabase
-          .from("tickets")
-          .update({
-            is_duplicate: r.relation_type === "hard_duplicate",
-            duplicate_of:
-              r.relation_type === "hard_duplicate"
-                ? r.related_ticket_id
-                : null,
-            related_to:
-              r.relation_type === "related"
-                ? r.related_ticket_id
-                : null
-          })
-          .eq("id", ticket.id);
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      ticket_id: ticket.id,
-      intent_category,
-      reply_text: buildReplyText(
-  lang,
-  "intake_received",
-  undefined,
-  description_display,
-  intent_category
-)
-    });
-  }
-
-  catch (err: any) {
-    console.error("🔥 ERROR:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
-    });
-  }
-}
-
 /* =====================================================
-   SINGLE STATE ROUTER (AUTHORITATIVE)
-   - ONE switch
-   - ONE exit
+   SINGLE STATE ROUTER 
 ===================================================== */
 async function routeByState(
   req: NextApiRequest,
@@ -1262,17 +997,18 @@ async function handleSecondIntake(
      🔒 HARD RULE 2: must be meaningful maintenance
      (no greetings, no chatter)
   ===================================================== */
-  const meaningful = await aiIsMeaningfulIssue(text);
 
-if (!meaningful) {
-    return res.status(200).json({
-      success: true,
-      reply_text:
-        lang === "ms"
-          ? "Sila terangkan masalah penyelenggaraan yang baharu."
-          : "Please describe the new maintenance issue."
-    });
-  }
+const hasMeaningfulIntent = await aiIsMeaningfulIssue(text);
+
+if (!hasMeaningfulIntent) {
+  return res.status(200).json({
+    success: true,
+    reply_text:
+      lang === "ms"
+        ? "Sila terangkan masalah penyelenggaraan yang baharu."
+        : "Please describe the new maintenance issue."
+  });
+}
 
   /* =====================================================
      ✅ VALID SECOND TICKET DESCRIPTION
@@ -1288,15 +1024,252 @@ if (!meaningful) {
     })
     .eq("id", session.id);
 
-  /* =====================================================
-     🔁 RE-ENTER CORE HANDLER SAFELY
-     (single source of truth)
-  ===================================================== */
-return coreHandler(req, res, {
-  ...originalBody,
-  description_raw: text
+return intakeEngine(req, res, {
+  condo_id: req.body.condo_id,
+  phone_number: normalizeWhatsappPhone(req.body.phone_number)!,
+  description_raw: text,
+  session: {
+    ...session,
+    state: "intake",
+    current_ticket_id: null,
+    expected_input: "type_description"
+  },
+  existingTicket: null,
+  mode: "whatsapp"
 });
 }
+
+/* =========================================================================== ✅ INTAKE ENGINE (TICKET CREATION ONLY) ========================================================================================= */
+async function intakeEngine(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  params: {
+    condo_id: string;
+    phone_number: string;
+    description_raw: string;
+    session: any;
+    existingTicket: any;
+    mode: "whatsapp" | "background";
+  }
+): Promise<void> {
+  const {
+    condo_id,
+    phone_number,
+    description_raw,
+    session: effectiveSession,
+    existingTicket,
+    mode
+  } = params;
+
+   /* =====================================================
+     ⬇⬇⬇ INTAKE LOGIC ⬇⬇⬇
+
+     MOVE YOUR CURRENT INTAKE CODE HERE, UNCHANGED:
+     - throttle
+     - greeting guards
+     - meaningful intent
+     - language lock
+     - resident verification
+     - intent detection
+     - ticket creation
+     - embedding + duplicate
+     - reply_text
+  ===================================================== */
+
+     /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
+  /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
+    let lang: "en" | "ms" | "zh" | "ta" | null =
+      effectiveSession?.language ??
+      existingTicket?.language ??
+      null;
+
+    /* ===== 🧠 ABUSE / SPAM THROTTLING (ALWAYS FIRST) ===== */
+    const hasActiveTicket = !!effectiveSession?.current_ticket_id;
+
+ const throttle = await checkThrottle(condo_id, phone_number);
+
+if (!throttle.allowed) {
+  const tempLang = lang ?? detectLanguage(description_raw);
+  return res.status(200).json({
+    success: true,
+    ignored: true,
+    reply_text: buildThrottleNotice(tempLang)
+  });
+}
+    
+   /* ========= 🧠MEANINGFUL INTENT CHECK ============ */
+  const hasMeaningfulIntent = await aiIsMeaningfulIssue(description_raw);
+
+  if (!hasMeaningfulIntent) {
+    const tempLang = lang ?? detectLanguage(description_raw);
+    return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text: buildReplyText(tempLang, "non_maintenance")
+    });
+  }
+
+    /* ===== 🔴 🧠LOCK LANGUAGE ONLY ONCE (AI CONFIRMED) ===== */
+    lang = await aiDetectLanguage(description_raw);
+
+        const description_clean = await aiCleanDescription(description_raw);
+
+const description_display =
+  lang === "en"
+    ? description_clean
+    : await aiTranslateForDisplay(description_clean, lang);
+
+
+       /* ===== 🧠 VERIFY RESIDENT ===== */
+    const { data: resident } = await supabase
+      .from("residents")
+      .select("unit_id, approved")
+      .eq("condo_id", condo_id)
+      .eq("phone_number", phone_number)
+      .maybeSingle();
+
+    if (!resident || !resident.approved) {
+      return res.status(200).json({
+      success: true,
+      ignored: true,
+      reply_text:
+        "⚠️Your phone number is not registered. Please contact your management office to register before submitting maintenance requests. ⚠️ Nombor telefon anda belum berdaftar. Sila hubungi management ofis untuk mendaftar sebelum menghantar tiket penyelenggaraan"
+});
+
+    }
+
+    const unit_id = resident.unit_id;
+
+    /* ===== INTENT DETECTION ===== */
+    let intent_category: "unit" | "common_area" | "mixed" | "uncertain" =
+      "uncertain";
+    let intent_source: "keyword" | "ai" | "none" = "none";
+    let intent_confidence = 1;
+
+    const commonHit = keywordMatch(description_raw, COMMON_AREA_KEYWORDS);
+    const unitHit = keywordMatch(description_raw, OWN_UNIT_KEYWORDS);
+    const ambiguousHit = keywordMatch(description_raw, AMBIGUOUS_KEYWORDS);
+
+    if (commonHit && unitHit) {
+      intent_category = "mixed";
+      intent_source = "keyword";
+    } else if (commonHit && !ambiguousHit) {
+      intent_category = "common_area";
+      intent_source = "keyword";
+    } else if (unitHit && !ambiguousHit) {
+      intent_category = "unit";
+      intent_source = "keyword";
+    } else {
+      const ai = await aiClassify(description_raw);
+      if (ai.confidence >= 0.7) {
+        intent_category = ai.category;
+        intent_confidence = ai.confidence;
+        intent_source = "ai";
+      }
+    }
+
+    /* ===== 🧠 CREATE TICKET ===== */
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .insert({
+        condo_id,
+        unit_id: intent_category === "unit" ? unit_id : null,
+        description_raw,
+        description_clean,
+        source: "whatsapp",
+        status: "new",
+        is_common_area: intent_category === "common_area",
+        intent_category,
+        intent_source,
+        intent_confidence,
+        diagnosis_fee: intent_category === "unit" ? 30 : 0,
+        language: lang
+      })
+      .select()
+      .single();
+
+      if (error || !ticket) throw error;
+    
+/* ===== 🔒 SET CONVERSATION STATE AFTER INTAKE ===== */
+   await supabase
+    .from("conversation_sessions")
+    .upsert({
+      condo_id,
+      phone_number,
+      current_ticket_id: ticket.id,
+      state: "awaiting_confirmation",
+      expected_input: "confirm_menu", // 🔐 LOCK
+      language: lang,
+      updated_at: new Date()
+  });
+
+    /* ===== 🧠 EMBEDDING + DUPLICATE ===== */
+    if (mode === "background" && openai && description_clean) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description_clean
+      });
+
+      const embedding = emb.data[0].embedding;
+
+      await supabase
+        .from("tickets")
+        .update({ embedding })
+        .eq("id", ticket.id);
+
+      const { data: relation } = await supabase.rpc(
+        "detect_ticket_relation",
+        {
+          query_embedding: embedding,
+          condo_filter: condo_id,
+          ticket_unit_id: ticket.unit_id,
+          ticket_is_common_area: ticket.is_common_area,
+          exclude_id: ticket.id,
+          similarity_threshold: 0.85
+        }
+      );
+
+      if (relation?.length) {
+        const r = relation[0];
+
+        await supabase
+          .from("tickets")
+          .update({
+            is_duplicate: r.relation_type === "hard_duplicate",
+            duplicate_of:
+              r.relation_type === "hard_duplicate"
+                ? r.related_ticket_id
+                : null,
+            related_to:
+              r.relation_type === "related"
+                ? r.related_ticket_id
+                : null
+          })
+          .eq("id", ticket.id);
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      ticket_id: ticket.id,
+      intent_category,
+      reply_text: buildReplyText(
+  lang,
+  "intake_received",
+  undefined,
+  description_display,
+  intent_category
+)
+    });
+
+  catch (err: any) {
+    console.error("🔥 ERROR:", err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message
+    });
+      }
+    }
 
 /*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
 
@@ -2276,8 +2249,6 @@ function formatMaintenanceCategory(
 
   return map[lang][category] ?? category;
 }
-
-
 
 /*====================================================*/
 
