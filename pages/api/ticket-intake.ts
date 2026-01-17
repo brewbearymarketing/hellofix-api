@@ -1240,13 +1240,21 @@ if (finalConversationState === "intake_v2") {
   const expectedInput =
     effectiveSession.expected_input ?? "type_description";
 
+/*============ 🔒 ABSOLUTE GUARD — menu replies NEVER enter intake==============*/
+if (
+  effectiveSession?.current_ticket_id &&
+  /^\d+$/.test(description_raw.trim())
+) {
+  return routeByState(req, res, effectiveSession, description_raw);
+}
+
 // PRIMARY INTAKE (FIRST TICKET ONLY)
 if (
   finalConversationState === "intake" &&
   effectiveSession?.expected_input === "type_description" &&
   !effectiveSession.current_ticket_id
 ) {
-  return intakeEngine(req, res, {
+  await intakeEngine(req, res, {
     condo_id,
     phone_number,
     description_raw,
@@ -1254,6 +1262,8 @@ if (
     existingTicket,
     mode: "whatsapp"
   });
+  
+  return;
 }
 
   /* ================= 🔒 BANK-GRADE INTAKE HARD STOP ================= */
@@ -2018,6 +2028,11 @@ async function intakeEngine(
     mode
   } = params;
 
+   // 🔒 HARD GUARD — menu replies must NEVER enter intake
+    if (/^\d+$/.test(description_raw.trim())) {
+      return res.status(200).json({ success: true });
+    }
+
    /* =====================================================
      ⬇⬇⬇ INTAKE LOGIC ⬇⬇⬇
 
@@ -2033,8 +2048,7 @@ async function intakeEngine(
      - reply_text
   ===================================================== */
 
-     /* ===== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
-  /* ============❌CHECK EXISTING CONVERSATION LANGUAGE================ */
+    /* ======== ❌LANGUAGE IS NULL UNTIL MEANINGFUL ===== */
     let lang: "en" | "ms" | "zh" | "ta" | null =
       effectiveSession?.language ??
       existingTicket?.language ??
