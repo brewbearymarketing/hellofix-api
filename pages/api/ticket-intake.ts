@@ -1107,7 +1107,8 @@ if (!condo_id) {
   const originalBody = effectiveBody;
 
   // 🔒 AUTHORITATIVE NORMALIZATION (CORE)
-const phone_number_raw = normalizeWhatsappPhone(body.phone_number);
+const phone_number_raw = normalizeWhatsappPhone(effectiveBody.phone_number);
+const description_raw = await normalizeIncomingMessage(effectiveBody);
 
 if (!phone_number_raw) {
   return res.status(200).json({ success: true });
@@ -1117,8 +1118,6 @@ const phone_number: string = phone_number_raw;
 
 
       /* =================🧠 HANDLERS NORMALIZE MESSAGE ================= */
-  const description_raw = await normalizeIncomingMessage(body);
-
   if (!description_raw) {
     return res.status(200).json({ success: true });
   }
@@ -1918,6 +1917,22 @@ async function handleSecondIntake(
   const lang = session.language ?? "en";
   const text = normalizeText(description_raw);
 
+    /* ================= 🔒 THROTTLE GUARD (SECOND TICKET) ================= */
+  const phone = normalizeWhatsappPhone(originalBody?.phone_number);
+
+  if (!phone || !originalBody?.condo_id) {
+    return res.status(200).json({ success: true });
+  }
+
+  const throttle = await checkThrottle(
+    originalBody.condo_id,
+    phone
+  );
+
+  if (!throttle.allowed) {
+    return res.status(200).json({ success: true });
+  }
+
   /* =====================================================
      🔒 HARD RULE 1: numbers are NEVER valid here
      (prevents menu bleed-through)
@@ -1961,8 +1976,8 @@ if (!hasMeaningfulIntent) {
     .eq("id", session.id);
 
 return intakeEngine(req, res, {
-  condo_id: req.body.condo_id,
-  phone_number: normalizeWhatsappPhone(req.body.phone_number)!,
+  condo_id: originalBody.condo_id,
+  phone_number: normalizeWhatsappPhone(originalBody.phone_number)!,
   description_raw: text,
   session: {
     ...session,
