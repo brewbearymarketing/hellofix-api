@@ -119,6 +119,8 @@ export async function coreHandler(
 ): Promise<void> {
   try{
   const condo_id = body.condo_id;
+  const originalBody = body;
+
   // 🔒 AUTHORITATIVE NORMALIZATION (CORE)
 const phone_number_raw = normalizeWhatsappPhone(body.phone_number);
 
@@ -248,7 +250,7 @@ if (
 
   // 🆕 SECOND TICKET INTAKE PIPELINE
 if (finalConversationState === "intake_v2") {
-  return handleSecondIntake(req, res, effectiveSession, description_raw);
+  return handleSecondIntake(req, res, effectiveSession, description_raw, originalBody);
 }
 
   const expectedInput =
@@ -1238,7 +1240,8 @@ async function handleSecondIntake(
   req: NextApiRequest,
   res: NextApiResponse,
   session: any,
-  description_raw: string
+  description_raw: string,
+  originalBody: any
 ) {
   const lang = session.language ?? "en";
   const text = normalizeText(description_raw);
@@ -1288,8 +1291,8 @@ if (!meaningful) {
      🔁 RE-ENTER CORE HANDLER SAFELY
      (single source of truth)
   ===================================================== */
- return coreHandler(req, res, {
-  ...req.body,
+return coreHandler(req, res, {
+  ...originalBody,
   description_raw: text
 });
 }
