@@ -2250,5 +2250,4 @@ const description_display =
     });
       }
     }
-}
 
