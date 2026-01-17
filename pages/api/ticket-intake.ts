@@ -2031,6 +2031,7 @@ async function intakeEngine(
     mode: "whatsapp" | "background";
   }
 ): Promise<void> {
+  try {
   const {
     condo_id,
     phone_number,
@@ -2249,4 +2250,5 @@ const description_display =
     });
       }
     }
+}
 
