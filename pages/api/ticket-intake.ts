@@ -2242,7 +2242,7 @@ const description_display =
 )
     });
 
-  catch (err: any) {
+  }catch (err: any) {
     console.error("🔥 ERROR:", err);
     return res.status(500).json({
       error: "Internal Server Error",
