@@ -1851,55 +1851,6 @@ async function handleScheduleSelection(
     });
 }
 
-// 🆕 NEW — CONTRACTOR ASSIGNMENT (SYSTEM ONLY)
-async function handleContractorAssignment(
-  _req: NextApiRequest,
-  res: NextApiResponse,
-  session: any,
-  description_raw: string
-) {
-
-  if (mode === "whatsapp") {
-    // 🚀 Defer contractor assignment to cron / webhook / manual trigger
-    return res.status(200).json({ success: true });
-  }
-  
-  const ticketId = session.current_ticket_id;
-
-  const { data: contractor } = await supabase.rpc(
-    "pick_next_contractor",
-    { ticket_id: ticketId }
-  );
-
-  if (!contractor) {
-    await supabase
-      .from("tickets")
-      .update({
-        assignment_status: "exhausted",
-        refund_status: "pending",
-        status: "cancelled_system"
-      })
-      .eq("id", ticketId);
-
-    return res.status(200).json({ success: true });
-  }
-
-  // ✅ BANK-GRADE SLA PERSISTENCE
-  const assignedAt = new Date();
-  const deadline = new Date(assignedAt.getTime() + 60 * 60 * 1000);
-
-  await supabase
-    .from("tickets")
-    .update({
-      contractor_id: contractor.id,
-      assignment_status: "pending",
-      assigned_at: assignedAt,
-      assignment_deadline_at: deadline
-    })
-    .eq("id", ticketId);
-
-  return res.status(200).json({ success: true });
-}
 
 // 🆕 NEW — POST PAYMENT PROMPT
 async function handlePostPayment(
