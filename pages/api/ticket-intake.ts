@@ -19,6 +19,985 @@ console.log("OPENAI ENABLED:", !!openai);
 /* ================= ⭐RUNTIME MODE ================= */
 const IS_WEBHOOK = true;
 
+/*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
+
+/* ================= 🔴✅ HELPER ABUSE / SPAM THROTTLING ================= */
+const THROTTLE_WINDOW_SECONDS = 60;
+const THROTTLE_SOFT_LIMIT = 5;
+const THROTTLE_HARD_LIMIT = 8;
+const THROTTLE_BLOCK_MINUTES = 5;
+
+async function checkThrottle(
+  condo_id: string,
+  phone_number: string
+): Promise<{
+  allowed: boolean;
+  level: "ok" | "soft" | "blocked";
+  count: number;
+}> {
+  const now = new Date();
+
+  const { data, error } = await supabase
+    .from("message_throttle")
+    .select("*")
+    .eq("condo_id", condo_id)
+    .eq("phone_number", phone_number)
+    .maybeSingle();
+
+  // Fail open
+  if (error) {
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  // First message
+  if (!data) {
+    await supabase.from("message_throttle").insert({
+      condo_id,
+      phone_number,
+      message_count: 1,
+      blocked_until: null,
+      updated_at: now
+    });
+
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  // Hard blocked
+  if (data.blocked_until && new Date(data.blocked_until) > now) {
+    return {
+      allowed: false,
+      level: "blocked",
+      count: data.message_count
+    };
+  }
+
+  const windowStart = new Date(data.first_seen_at);
+  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
+
+  // Window expired → reset
+  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: 1,
+        first_seen_at: now,
+        blocked_until: null,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return { allowed: true, level: "ok", count: 1 };
+  }
+
+  const newCount = data.message_count + 1;
+
+  // Hard limit
+  if (newCount > THROTTLE_HARD_LIMIT) {
+    const blockedUntil = new Date(
+      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
+    );
+
+    await supabase
+      .from("message_throttle")
+      .update({
+        message_count: newCount,
+        blocked_until: blockedUntil,
+        updated_at: now
+      })
+      .eq("id", data.id);
+
+    return {
+      allowed: false,
+      level: "blocked",
+      count: newCount
+    };
+  }
+
+  // Soft / normal
+  await supabase
+    .from("message_throttle")
+    .update({
+      message_count: newCount,
+      updated_at: now
+    })
+    .eq("id", data.id);
+
+  return {
+    allowed: true,
+    level: newCount > THROTTLE_SOFT_LIMIT ? "soft" : "ok",
+    count: newCount
+  };
+}
+
+/* =================✅ HELPER THROTTLE NOTICE ================= */
+function buildThrottleNotice(
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  switch (lang) {
+    case "ms":
+      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
+    case "zh":
+      return "您发送消息过于频繁。请稍等片刻后再发送。";
+    case "ta":
+      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
+    default:
+      return "You are sending messages too quickly. Please wait a moment before sending another message.";
+  }
+}
+
+/* ================= ✅ HELPERKEYWORDS MATCH ================= */
+const COMMON_AREA_KEYWORDS = [
+  "lobby","lift","elevator","parking","corridor","staircase",
+  "garbage","trash","bin room","pool","gym",
+  "lif","lobi","koridor","tangga","tempat letak kereta",
+  "rumah sampah","tong sampah",
+  "电梯","走廊","停车场","垃圾房","泳池",
+  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
+];
+
+const OWN_UNIT_KEYWORDS = [
+  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
+  "master toilet","house bathroom","house lamp","room lamp",
+  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
+  "bilik air rumah","lampu rumah","lampu bilik",
+  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
+  "அறை","சமையலறை"
+];
+
+const AMBIGUOUS_KEYWORDS = [
+  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
+  "厕所","空调","கழிப்பிடம்","चिराग","灯"
+];
+
+/* ===== ✅ HELPER GREETING GUARD 1/ NO-INTENT KEYWORDS ===== */
+const GREETING_KEYWORDS = [
+  "hi","hello","hey","morning","afternoon","evening",
+  "good morning","good afternoon","good evening",
+  "thanks","thank you","tq","ok","okay","noted",
+  "test","testing","yo","boss","bro","sis",
+
+  // Malay
+  "hai","helo","selamat pagi","selamat petang","selamat malam",
+  "terima kasih","okey",
+
+  // Chinese
+  "你好","早安","晚安","谢谢",
+
+  // Tamil
+  "வணக்கம்","நன்றி"
+];
+
+function keywordMatch(text: string, keywords: string[]) {
+  const t = text.toLowerCase();
+  return keywords.some(k => t.includes(k.toLowerCase()));
+}
+
+/* ===== ✅ HELPER GREETING GUARD 2 ===== */
+function isGreetingOnly(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+
+  // ✅ NEVER treat numeric replies as greeting
+  if (/^\d+$/.test(t)) return false;
+
+  // Very short non-numeric messages
+  if (t.length <= 3) return true;
+
+  return GREETING_KEYWORDS.some(
+    k => t === k || t.startsWith(k + " ")
+  );
+}
+
+
+/*=====================2. ✅ HELPER AI==========================*/
+
+/* ===== 🔴✅ HELPER GREETING GUARD 3/ AI MEANINGFUL ISSUE CHECK (BANK-GRADE) ===== */
+async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
+  if (!openai) return true; // fail-open
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a property maintenance gatekeeper for a condominium management system.
+
+Your task:
+Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
+
+Reply ONLY in JSON:
+{"is_issue": true|false}
+
+ACCEPT (return true) if the issue involves:
+- Building-attached or unit-attached assets
+- Fixtures that are part of the property or permanently installed
+
+Examples that MUST be accepted:
+- Water leaks, pipes, toilets, sinks, drains
+- Electrical wiring, switches, wall sockets
+- Ceiling fans
+- Air conditioners (AC, aircond)
+- Built-in lights or lamps
+- Doors, windows, sliding doors
+- Walls, ceilings, floors
+- Lift, corridor, lobby, parking, staircase
+- Any structural, plumbing, electrical, or mechanical issue related to the condo or unit
+
+REJECT (return false) if the issue involves:
+- Personal lifestyle or movable appliances
+- Items that are NOT permanently attached to the building
+
+Examples that MUST be rejected:
+- Television (TV)
+- Washing machine
+- Refrigerator
+- Microwave
+- Rice cooker
+- Laptop, phone, router
+- Furniture (sofa, table, bed)
+- Personal electronics or gadgets
+
+IMPORTANT RULES:
+- Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
+- If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
+- Greetings, chit-chat, testing messages, or unclear complaints → return false
+- Do NOT guess. If unsure but sounds like property maintenance → return true
+`
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+    return obj.is_issue === true;
+  } catch {
+    return true;
+  }
+}
+
+/* ================= ✅ HELPER AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
+async function aiTranslateForDisplay(
+  text: string,
+  targetLang: "en" | "ms" | "zh" | "ta"
+): Promise<string> {
+  if (!openai || targetLang === "en") return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the text into the target language. " +
+            "Keep it short, natural, and suitable for WhatsApp display. " +
+            "Do NOT add explanations. Reply ONLY the translated text."
+        },
+        {
+          role: "user",
+          content: `Target language: ${targetLang}\nText: ${text}`
+        }
+      ]
+    });
+
+    return r.choices[0]?.message?.content || text;
+    
+  } catch {
+    return text; // fail-safe
+  }
+}
+
+/* ================= ✅ HELPER AI LANGUAGE DETECTOR ================= */
+async function aiDetectLanguage(
+  text: string
+): Promise<"en" | "ms" | "zh" | "ta"> {
+  if (!openai) return "en";
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Detect the primary language of the message. " +
+            "Reply ONLY JSON: {\"lang\": \"en\"|\"ms\"|\"zh\"|\"ta\"}. " +
+            "Malay = ms. Ignore greetings."
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    if (["en", "ms", "zh", "ta"].includes(obj.lang)) {
+      return obj.lang;
+    }
+
+    return "en";
+  } catch {
+    return "en";
+  }
+}
+
+/* ================= ✅ HELPER AI CLASSIFIER ================= */
+async function aiClassify(text: string): Promise<{
+  category: "unit" | "common_area" | "mixed" | "uncertain";
+  confidence: number;
+}> {
+  if (!openai) return { category: "uncertain", confidence: 0 };
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
+        },
+        { role: "user", content: text }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const raw = r.choices[0]?.message?.content;
+    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
+
+    return {
+      category: obj.category ?? "uncertain",
+      confidence: Number(obj.confidence ?? 0)
+    };
+  } catch {
+    return { category: "uncertain", confidence: 0 };
+  }
+}
+
+/* ================= ✅ HELPER MALAYSIAN AI NORMALISER ================= */
+async function aiCleanDescription(text: string): Promise<string> {
+  if (!openai) return text;
+
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a Malaysian property maintenance assistant.
+
+Rewrite the issue into ONE short, clear maintenance sentence in English.
+
+Rules:
+- Remove filler words (lah, lor, leh, ah, eh).
+- Translate Malaysian slang / rojak into standard English.
+- Translate Malay / Chinese / Tamil words if present.
+- Keep ONLY the asset + problem + location if mentioned.
+- No emojis. No apologies. No extra words.
+- Do NOT guess causes. Do NOT add solutions.
+`
+        },
+        { role: "user", content: text }
+      ]
+    });
+
+    return r.choices[0]?.message?.content || text;
+  } catch {
+    return text;
+  }
+}
+
+/*=====================3. ✅ HELPER TEXT/MEDIA==========================*/
+
+/* ================= ✅ HELPER DETECT LANGUAGE ================= */
+function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
+  const t = text.toLowerCase();
+
+  if (/[\u4e00-\u9fff]/.test(t)) return "zh"; // Chinese
+  if (/[\u0b80-\u0bff]/.test(t)) return "ta"; // Tamil
+
+  if (
+    t.includes("hai") ||
+    t.includes("selamat") ||
+    t.includes("terima kasih")
+  ) return "ms";
+
+  return "en";
+}
+
+/* ================= ✅ HELPER TRANSCRIPT CLEANER ================= */
+function cleanTranscript(text: string): string {
+  if (!text) return text;
+
+  let t = text.toLowerCase();
+
+  t = t.replace(
+    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
+    ""
+  );
+
+  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
+  t = t.replace(/\s+/g, " ");
+
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/* ================= ✅ HELPER TRANSCRIPTION ================= */
+async function transcribeVoice(mediaUrl: string): Promise<string | null> {
+  if (!openai) return null;
+
+  try {
+    const auth = Buffer.from(
+      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+    ).toString("base64");
+
+    const res = await fetch(mediaUrl, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
+
+    if (!res.ok) return null;
+
+    const buffer = await res.arrayBuffer();
+
+    const file = await toFile(
+      Buffer.from(buffer),
+      "voice",
+      { type: res.headers.get("content-type") || "application/octet-stream" }
+    );
+
+    const transcript = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1"
+    });
+
+    return transcript.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ================= 🔴✅ HELPER MESSAGE NORMALIZER ================= */
+async function normalizeIncomingMessage(body: any): Promise<string> {
+  let text: string = body.description_raw || "";
+
+  if (!text && body.voice_url) {
+    const transcript = await transcribeVoice(body.voice_url);
+    if (transcript) text = transcript;
+  }
+
+  if (!text && body.image_url) {
+    text = "Photo evidence provided. Issue description pending.";
+  }
+
+  return cleanTranscript(text);
+}
+
+/*=============== ✅ HELPER FORMAT INTENT LABEL ========================*/
+function formatIntentLabel(
+  intent: "unit" | "common_area" | "mixed" | "uncertain",
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map = {
+    en: {
+      unit: "Unit",
+      common_area: "Common area",
+      mixed: "Unit & common area",
+      uncertain: "Uncertain"
+    },
+    ms: {
+      unit: "Unit kediaman",
+      common_area: "Kawasan bersama",
+      mixed: "Unit & kawasan bersama",
+      uncertain: "Tidak pasti"
+    },
+    zh: {
+      unit: "单位",
+      common_area: "公共区域",
+      mixed: "单位与公共区域",
+      uncertain: "不确定"
+    },
+    ta: {
+      unit: "தனிப்பட்ட யூனிட்",
+      common_area: "பொது பகுதி",
+      mixed: "யூனிட் மற்றும் பொது பகுதி",
+      uncertain: "தெளிவில்லை"
+    }
+  };
+
+  return map[lang][intent];
+}
+
+/*=====================4. ✅ HELPER REPLY BUILDER ==========================*/
+/* ================= 🆕 MAINTENANCE CATEGORY CONSTANTS ================= */
+
+// 🆕 NEW — MAINTENANCE CATEGORY TYPES
+type MaintenanceCategory =
+  | "electrical"
+  | "plumbing"
+  | "air_conditioning"
+  | "lighting"
+  | "sanitary"
+  | "door_window"
+  | "ceiling_wall"
+  | "flooring"
+  | "pest_control"
+  | "lift"
+  | "parking"
+  | "common_facility"
+  | "others";
+
+// 🆕 NEW — CATEGORY → DIAGNOSIS FEE (RM)
+const CATEGORY_DIAGNOSIS_FEE: Record<MaintenanceCategory, number> = {
+  electrical: 30,
+  plumbing: 30,
+  air_conditioning: 40,
+  lighting: 30,
+  sanitary: 30,
+  door_window: 30,
+  ceiling_wall: 30,
+  flooring: 30,
+  pest_control: 50,
+  lift: 0,
+  parking: 0,
+  common_facility: 0,
+  others: 30
+};
+
+
+/* =================✅ HELPER BANK GRADE REPLY GENERATOR ================= */
+function buildReplyText(
+  lang: "en" | "ms" | "zh" | "ta",
+  type:
+  | "greeting"
+  | "greeting_soft"
+  | "greeting_firm"
+  | "intake_received"
+  | "confirmed"
+  | "non_maintenance",
+  ticketId?: string,
+  descriptionDisplay?: string,
+  intentCategory?: "unit" | "common_area" | "mixed" | "uncertain"
+): string {
+  if (type === "greeting") {
+    switch (lang) {
+      case "zh":
+        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
+      case "ta":
+        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
+      case "ms":
+        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
+      default:
+        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
+    }
+  }
+
+if (type === "greeting_soft") {
+  switch (lang) {
+    case "ms":
+      return "Sekadar peringatan kecil 🙂\nSila terangkan masalah penyelenggaraan supaya kami boleh buka tiket untuk anda.";
+    case "zh":
+      return "小提醒一下 🙂\n请描述维修问题，以便我们为您创建工单。";
+    case "ta":
+      return "ஒரு சிறிய நினைவூட்டல் 🙂\nடிக்கெட் உருவாக்க, தயவுசெய்து பராமரிப்பு பிரச்சனையை விவரிக்கவும்.";
+    default:
+      return "Just a quick reminder 🙂\nPlease describe the maintenance issue so we can create a ticket for you.";
+  }
+}
+
+if (type === "greeting_firm") {
+  switch (lang) {
+    case "ms":
+      return "Untuk meneruskan, kami perlukan penerangan ringkas mengenai masalah penyelenggaraan.\nSelepas itu, kami akan uruskan selebihnya.";
+    case "zh":
+      return "要继续处理，我们需要您简要说明维修问题。\n收到后，我们将为您安排后续。";
+    case "ta":
+      return "தொடர, தயவுசெய்து பராமரிப்பு பிரச்சனையை சுருக்கமாக விளக்கவும்.\nமீதியைக் kami uruskan.";
+    default:
+      return "To proceed, we’ll need a brief description of the maintenance issue.\nOnce received, we’ll take care of the rest.";
+  }
+}
+
+if (type === "intake_received") {
+  const intentLabel = intentCategory
+  ? formatIntentLabel(intentCategory, lang)
+  : null;
+
+  const issue = descriptionDisplay
+    ? `"${descriptionDisplay}"`
+    : "";
+
+  switch (lang) {
+    case "zh":
+      return `🛠 维修工单已记录。
+我们理解您的问题是关于 ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
+
+请回复：
+1️⃣ 确认工单
+2️⃣ 编辑描述
+3️⃣ 取消工单`;
+
+    case "ta":
+      return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
+உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
+
+${intentLabel ? `வகை: ${intentLabel}\n` : ""}
+
+பதில்:
+1️⃣ டிக்கெட்டை உறுதி செய்ய
+2️⃣ விளக்கத்தை திருத்த
+3️⃣ டிக்கெட்டை ரத்து செய்ய`;
+
+    case "ms":
+      return `🛠 Laporan penyelenggaraan telah direkodkan.
+Kami memahami bahawa isu anda berkaitan ${issue}
+
+${intentLabel ? `Kategori: ${intentLabel}\n` : ""}
+
+Sila balas:
+1️⃣ Sahkan tiket
+2️⃣ Edit keterangan
+3️⃣ Batalkan tiket`;
+
+    default:
+      return `🛠 Maintenance ticket recorded.
+We understand that your issue relates to ${issue}
+
+${intentLabel ? `Category: ${intentLabel}\n` : ""}
+
+Please reply:
+1️⃣ Confirm ticket
+2️⃣ Edit description
+3️⃣ Cancel ticket`;
+  }
+}
+
+  if (type === "non_maintenance") {
+  switch (lang) {
+    case "ms":
+      return (
+        "Terima kasih atas mesej anda 😊\n\n" +
+        "Kami mengesan bahawa mesej ini mungkin **bukan isu penyelenggaraan**.\n\n" +
+        "Contoh isu yang boleh dilaporkan:\n" +
+        "• Paip bocor\n" +
+        "• Lif rosak\n" +
+        "• Lampu tidak menyala\n\n" +
+        "Sila hantar masalah penyelenggaraan berkaitan unit atau kawasan bersama. Terima kasih!"
+      );
+
+    case "zh":
+      return (
+        "谢谢您的信息 😊\n\n" +
+        "我们发现这条信息**可能不是维修相关问题**。\n\n" +
+        "可提交的维修示例：\n" +
+        "• 水管漏水\n" +
+        "• 电梯故障\n" +
+        "• 灯不亮\n\n" +
+        "请重新发送与房屋或公共区域维修相关的问题。谢谢！"
+      );
+
+    case "ta":
+      return (
+        "உங்கள் செய்திக்கு நன்றி 😊\n\n" +
+        "இது **பராமரிப்பு சம்பந்தமான பிரச்சனை அல்ல** என்று தோன்றுகிறது.\n\n" +
+        "உதாரணமாக அனுப்பக்கூடிய பிரச்சனைகள்:\n" +
+        "• குழாய் கசிவு\n" +
+        "• லிப்ட் பழுது\n" +
+        "• விளக்கு எரியவில்லை\n\n" +
+        "தயவுசெய்து பராமரிப்பு தொடர்பான பிரச்சனையை அனுப்பவும். நன்றி!"
+      );
+
+    default:
+      return (
+        "Thanks for your message 😊\n\n" +
+        "It looks like this may **not be a maintenance-related issue**.\n\n" +
+        "Examples of accepted issues:\n" +
+        "• Leaking pipe\n" +
+        "• Lift not working\n" +
+        "• Light not functioning\n\n" +
+        "Please send a maintenance issue related to your unit or common area. Thank you!"
+      );
+  }
+}
+
+  // confirmed
+  switch (lang) {
+    case "zh":
+      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
+    case "ta":
+      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
+    case "ms":
+      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
+    default:
+      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
+  }
+}
+
+/* ================= ✅ HELPER FOLLOW-UP REPLY TEXT ================= */
+function buildFollowUpReply(
+  lang: "en" | "ms" | "zh" | "ta",
+  type:
+    | "confirm_success"
+    | "ask_edit"
+    | "cancelled"
+    | "invalid_confirm"
+): string {
+  switch (type) {
+    case "confirm_success":
+      switch (lang) {
+        case "ms":
+          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30.";
+        case "zh":
+          return "✅ 工单已确认。\n检查费用：RM30.";
+        case "ta":
+          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30.";
+        default:
+          return "✅ Ticket confirmed.\nDiagnosis fee: RM30.";
+      }
+
+    case "ask_edit":
+      switch (lang) {
+        case "ms":
+          return "✏️ Sila balas dengan penerangan isu yang dikemaskini.";
+        case "zh":
+          return "✏️ 请回复更新后的问题描述。";
+        case "ta":
+          return "✏️ தயவுசெய்து திருத்தப்பட்ட பிரச்சனை விளக்கத்தை அனுப்பவும்.";
+        default:
+          return "✏️ Please reply with the corrected issue description.";
+      }
+
+    case "cancelled":
+      switch (lang) {
+        case "ms":
+          return "❌ Tiket telah dibatalkan.";
+        case "zh":
+          return "❌ 工单已取消。";
+        case "ta":
+          return "❌ டிக்கெட் ரத்து செய்யப்பட்டது.";
+        default:
+          return "❌ Ticket cancelled.";
+      }
+
+    case "invalid_confirm":
+      switch (lang) {
+        case "ms":
+          return "Sila balas dengan 1, 2 atau 3 sahaja.";
+        case "zh":
+          return "请仅回复 1、2 或 3。";
+        case "ta":
+          return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
+        default:
+          return "Please reply with 1, 2, or 3 only.";
+      }
+  }
+}
+
+/*===================== ✅ HELPER NORMALIZE PHONE ===============================*/
+export function normalizeWhatsappPhone(input?: string | null): string | null {
+  if (!input) return null;
+
+  let p = input.toString().trim();
+
+  // Remove Twilio / WhatsApp prefix
+  p = p.replace(/^whatsapp:/i, "");
+
+  // Remove spaces, dashes, brackets
+  p = p.replace(/[^\d+]/g, "");
+
+  // Ensure leading +
+  if (!p.startsWith("+")) {
+    // Assume Malaysia if missing country code
+    if (p.startsWith("0")) {
+      p = "+6" + p;
+    } else if (p.startsWith("60")) {
+      p = "+" + p;
+    } else {
+      // Fallback (do not guess too hard)
+      p = "+" + p;
+    }
+  }
+
+  return p;
+}
+
+/*===================== ✅ HELPER WORKING DAY & SLOT ===============================*/
+// 🆕 NEW — PUBLIC HOLIDAYS (YYYY-MM-DD, extend as needed)
+const PUBLIC_HOLIDAYS = [
+  "2026-01-01",
+  "2026-02-01"
+];
+
+// 🆕 NEW
+function isSunday(date: Date) {
+  return date.getDay() === 0;
+}
+
+// 🆕 NEW
+function isPublicHoliday(date: Date) {
+  const ymd = date.toISOString().slice(0, 10);
+  return PUBLIC_HOLIDAYS.includes(ymd);
+}
+
+// 🆕 NEW — NEXT WORKING DAY (EXCLUDE SUNDAY & PH)
+function getNextWorkingDay(from = new Date()) {
+  const d = new Date(from);
+  d.setDate(d.getDate() + 1);
+
+  while (isSunday(d) || isPublicHoliday(d)) {
+    d.setDate(d.getDate() + 1);
+  }
+
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// 🆕 NEW — BUILD 3 FIXED SLOTS
+function buildSlots(date: Date) {
+  const base = new Date(date);
+
+  const s1 = new Date(base); s1.setHours(9, 0, 0, 0);
+  const e1 = new Date(base); e1.setHours(12, 0, 0, 0);
+
+  const s2 = new Date(base); s2.setHours(12, 0, 0, 0);
+  const e2 = new Date(base); e2.setHours(15, 0, 0, 0);
+
+  const s3 = new Date(base); s3.setHours(15, 0, 0, 0);
+  const e3 = new Date(base); e3.setHours(18, 0, 0, 0);
+
+  return [
+    { start: s1, end: e1 },
+    { start: s2, end: e2 },
+    { start: s3, end: e3 }
+  ];
+}
+
+/* ================= ✅ HELPER REFUND ================= */
+
+// 🆕 NEW
+async function processRefund(ticketId: string) {
+  await supabase
+    .from("tickets")
+    .update({
+      refund_status: "processed",
+      refunded_at: new Date(),
+      refund_reason: "NO_CONTRACTOR_AVAILABLE",
+      processed_by: "system"
+    })
+    .eq("id", ticketId);
+}
+
+/* ================= ✅ HELPER once ================= */
+function normalizeText(input: unknown): string {
+  if (typeof input !== "string") return "";
+  return input.trim();
+}
+
+/* ================= ✅ HELPER localize date ================= */
+function formatDateForLang(
+  date: Date,
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const localeMap: Record<typeof lang, string> = {
+    en: "en-GB",
+    ms: "ms-MY",
+    zh: "zh-CN",
+    ta: "ta-IN"
+  };
+
+  return date.toLocaleDateString(localeMap[lang], {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+/* ================= ✅ HELPER FORMAT MAINTENANCE CATEGORY ================= */
+function formatMaintenanceCategory(
+  category: MaintenanceCategory,
+  lang: "en" | "ms" | "zh" | "ta"
+): string {
+  const map: Record<
+    "en" | "ms" | "zh" | "ta",
+    Record<MaintenanceCategory, string>
+  > = {
+    en: {
+      electrical: "Electrical",
+      plumbing: "Plumbing",
+      air_conditioning: "Air conditioning",
+      lighting: "Lighting",
+      sanitary: "Sanitary",
+      door_window: "Door / Window",
+      ceiling_wall: "Ceiling / Wall",
+      flooring: "Flooring",
+      pest_control: "Pest control",
+      lift: "Lift",
+      parking: "Parking",
+      common_facility: "Common facility",
+      others: "Others"
+    },
+    ms: {
+      electrical: "Elektrik",
+      plumbing: "Paip",
+      air_conditioning: "Penyaman udara",
+      lighting: "Lampu",
+      sanitary: "Sanitari",
+      door_window: "Pintu / Tingkap",
+      ceiling_wall: "Siling / Dinding",
+      flooring: "Lantai",
+      pest_control: "Kawalan perosak",
+      lift: "Lif",
+      parking: "Tempat letak kereta",
+      common_facility: "Kemudahan bersama",
+      others: "Lain-lain"
+    },
+    zh: {
+      electrical: "电气",
+      plumbing: "水管",
+      air_conditioning: "空调",
+      lighting: "照明",
+      sanitary: "卫生设施",
+      door_window: "门 / 窗",
+      ceiling_wall: "天花板 / 墙壁",
+      flooring: "地板",
+      pest_control: "害虫控制",
+      lift: "电梯",
+      parking: "停车场",
+      common_facility: "公共设施",
+      others: "其他"
+    },
+    ta: {
+      electrical: "மின்சாரம்",
+      plumbing: "குழாய்",
+      air_conditioning: "குளிரூட்டி",
+      lighting: "விளக்கு",
+      sanitary: "சுகாதாரம்",
+      door_window: "கதவு / ஜன்னல்",
+      ceiling_wall: "மேல்தளம் / சுவர்",
+      flooring: "தரை",
+      pest_control: "பூச்சி கட்டுப்பாடு",
+      lift: "லிப்ட்",
+      parking: "வாகன நிறுத்தம்",
+      common_facility: "பொது வசதி",
+      others: "மற்றவை"
+    }
+  };
+
+  return map[lang][category] ?? category;
+}
+
 
 /*==============================================================================1. 🧠 HANDLERS =================================================================================================*/
 /* ===========================================================================================================================================================================================
@@ -1270,985 +2249,4 @@ const description_display =
     });
       }
     }
-
-/*==============================================================================1. ✅ HELPER THROTTLING & GUARDS=================================================================================================*/
-
-/* ================= 🔴✅ HELPER ABUSE / SPAM THROTTLING ================= */
-const THROTTLE_WINDOW_SECONDS = 60;
-const THROTTLE_SOFT_LIMIT = 5;
-const THROTTLE_HARD_LIMIT = 8;
-const THROTTLE_BLOCK_MINUTES = 5;
-
-async function checkThrottle(
-  condo_id: string,
-  phone_number: string
-): Promise<{
-  allowed: boolean;
-  level: "ok" | "soft" | "blocked";
-  count: number;
-}> {
-  const now = new Date();
-
-  const { data, error } = await supabase
-    .from("message_throttle")
-    .select("*")
-    .eq("condo_id", condo_id)
-    .eq("phone_number", phone_number)
-    .maybeSingle();
-
-  // Fail open
-  if (error) {
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  // First message
-  if (!data) {
-    await supabase.from("message_throttle").insert({
-      condo_id,
-      phone_number,
-      message_count: 1,
-      blocked_until: null,
-      updated_at: now
-    });
-
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  // Hard blocked
-  if (data.blocked_until && new Date(data.blocked_until) > now) {
-    return {
-      allowed: false,
-      level: "blocked",
-      count: data.message_count
-    };
-  }
-
-  const windowStart = new Date(data.first_seen_at);
-  const diffSeconds = (now.getTime() - windowStart.getTime()) / 1000;
-
-  // Window expired → reset
-  if (diffSeconds > THROTTLE_WINDOW_SECONDS) {
-    await supabase
-      .from("message_throttle")
-      .update({
-        message_count: 1,
-        first_seen_at: now,
-        blocked_until: null,
-        updated_at: now
-      })
-      .eq("id", data.id);
-
-    return { allowed: true, level: "ok", count: 1 };
-  }
-
-  const newCount = data.message_count + 1;
-
-  // Hard limit
-  if (newCount > THROTTLE_HARD_LIMIT) {
-    const blockedUntil = new Date(
-      now.getTime() + THROTTLE_BLOCK_MINUTES * 60 * 1000
-    );
-
-    await supabase
-      .from("message_throttle")
-      .update({
-        message_count: newCount,
-        blocked_until: blockedUntil,
-        updated_at: now
-      })
-      .eq("id", data.id);
-
-    return {
-      allowed: false,
-      level: "blocked",
-      count: newCount
-    };
-  }
-
-  // Soft / normal
-  await supabase
-    .from("message_throttle")
-    .update({
-      message_count: newCount,
-      updated_at: now
-    })
-    .eq("id", data.id);
-
-  return {
-    allowed: true,
-    level: newCount > THROTTLE_SOFT_LIMIT ? "soft" : "ok",
-    count: newCount
-  };
-}
-
-/* =================✅ HELPER THROTTLE NOTICE ================= */
-function buildThrottleNotice(
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  switch (lang) {
-    case "ms":
-      return "Anda menghantar mesej terlalu cepat. Sila tunggu sebentar sebelum menghantar mesej seterusnya.";
-    case "zh":
-      return "您发送消息过于频繁。请稍等片刻后再发送。";
-    case "ta":
-      return "நீங்கள் மிக விரைவாக செய்திகளை அனுப்புகிறீர்கள். தயவுசெய்து சிறிது நேரம் காத்திருந்து மீண்டும் அனுப்பவும்.";
-    default:
-      return "You are sending messages too quickly. Please wait a moment before sending another message.";
-  }
-}
-
-/* ================= ✅ HELPERKEYWORDS MATCH ================= */
-const COMMON_AREA_KEYWORDS = [
-  "lobby","lift","elevator","parking","corridor","staircase",
-  "garbage","trash","bin room","pool","gym",
-  "lif","lobi","koridor","tangga","tempat letak kereta",
-  "rumah sampah","tong sampah",
-  "电梯","走廊","停车场","垃圾房","泳池",
-  "லிப்ட்","நடைக்கூடம்","வாகன நிறுத்தம்","குப்பை"
-];
-
-const OWN_UNIT_KEYWORDS = [
-  "bedroom","bathroom","kitchen","sink","house toilet","room toilet",
-  "master toilet","house bathroom","house lamp","room lamp",
-  "bilik","dapur","tandas rumah","tandas bilik","tandas master",
-  "bilik air rumah","lampu rumah","lampu bilik",
-  "房间","厨房","房屋厕所","房间厕所","主厕所","房屋浴室","屋灯","房间灯",
-  "அறை","சமையலறை"
-];
-
-const AMBIGUOUS_KEYWORDS = [
-  "toilet","tandas","aircond","air conditioner","ac","lamp","lampu",
-  "厕所","空调","கழிப்பிடம்","चिराग","灯"
-];
-
-/* ===== ✅ HELPER GREETING GUARD 1/ NO-INTENT KEYWORDS ===== */
-const GREETING_KEYWORDS = [
-  "hi","hello","hey","morning","afternoon","evening",
-  "good morning","good afternoon","good evening",
-  "thanks","thank you","tq","ok","okay","noted",
-  "test","testing","yo","boss","bro","sis",
-
-  // Malay
-  "hai","helo","selamat pagi","selamat petang","selamat malam",
-  "terima kasih","okey",
-
-  // Chinese
-  "你好","早安","晚安","谢谢",
-
-  // Tamil
-  "வணக்கம்","நன்றி"
-];
-
-function keywordMatch(text: string, keywords: string[]) {
-  const t = text.toLowerCase();
-  return keywords.some(k => t.includes(k.toLowerCase()));
-}
-
-/* ===== ✅ HELPER GREETING GUARD 2 ===== */
-function isGreetingOnly(text: string): boolean {
-  const t = normalizeText(text).toLowerCase();
-
-  // ✅ NEVER treat numeric replies as greeting
-  if (/^\d+$/.test(t)) return false;
-
-  // Very short non-numeric messages
-  if (t.length <= 3) return true;
-
-  return GREETING_KEYWORDS.some(
-    k => t === k || t.startsWith(k + " ")
-  );
-}
-
-
-/*=====================2. ✅ HELPER AI==========================*/
-
-/* ===== 🔴✅ HELPER GREETING GUARD 3/ AI MEANINGFUL ISSUE CHECK (BANK-GRADE) ===== */
-async function aiIsMeaningfulIssue(text: string): Promise<boolean> {
-  if (!openai) return true; // fail-open
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a property maintenance gatekeeper for a condominium management system.
-
-Your task:
-Determine whether the user's message describes a REAL, actionable CONDO MAINTENANCE ISSUE.
-
-Reply ONLY in JSON:
-{"is_issue": true|false}
-
-ACCEPT (return true) if the issue involves:
-- Building-attached or unit-attached assets
-- Fixtures that are part of the property or permanently installed
-
-Examples that MUST be accepted:
-- Water leaks, pipes, toilets, sinks, drains
-- Electrical wiring, switches, wall sockets
-- Ceiling fans
-- Air conditioners (AC, aircond)
-- Built-in lights or lamps
-- Doors, windows, sliding doors
-- Walls, ceilings, floors
-- Lift, corridor, lobby, parking, staircase
-- Any structural, plumbing, electrical, or mechanical issue related to the condo or unit
-
-REJECT (return false) if the issue involves:
-- Personal lifestyle or movable appliances
-- Items that are NOT permanently attached to the building
-
-Examples that MUST be rejected:
-- Television (TV)
-- Washing machine
-- Refrigerator
-- Microwave
-- Rice cooker
-- Laptop, phone, router
-- Furniture (sofa, table, bed)
-- Personal electronics or gadgets
-
-IMPORTANT RULES:
-- Ceiling fans and air conditioners are NOT personal appliances → they ARE maintenance issues
-- If the message mixes accepted and rejected items (e.g. "TV rosak dan paip bocor"), return true
-- Greetings, chit-chat, testing messages, or unclear complaints → return false
-- Do NOT guess. If unsure but sounds like property maintenance → return true
-`
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-    return obj.is_issue === true;
-  } catch {
-    return true;
-  }
-}
-
-/* ================= ✅ HELPER AI TRANSLATE FOR DISPLAY (NO DB WRITE) ================= */
-async function aiTranslateForDisplay(
-  text: string,
-  targetLang: "en" | "ms" | "zh" | "ta"
-): Promise<string> {
-  if (!openai || targetLang === "en") return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Translate the text into the target language. " +
-            "Keep it short, natural, and suitable for WhatsApp display. " +
-            "Do NOT add explanations. Reply ONLY the translated text."
-        },
-        {
-          role: "user",
-          content: `Target language: ${targetLang}\nText: ${text}`
-        }
-      ]
-    });
-
-    return r.choices[0]?.message?.content || text;
-    
-  } catch {
-    return text; // fail-safe
-  }
-}
-
-/* ================= ✅ HELPER AI LANGUAGE DETECTOR ================= */
-async function aiDetectLanguage(
-  text: string
-): Promise<"en" | "ms" | "zh" | "ta"> {
-  if (!openai) return "en";
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Detect the primary language of the message. " +
-            "Reply ONLY JSON: {\"lang\": \"en\"|\"ms\"|\"zh\"|\"ta\"}. " +
-            "Malay = ms. Ignore greetings."
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-
-    if (["en", "ms", "zh", "ta"].includes(obj.lang)) {
-      return obj.lang;
-    }
-
-    return "en";
-  } catch {
-    return "en";
-  }
-}
-
-/* ================= ✅ HELPER AI CLASSIFIER ================= */
-async function aiClassify(text: string): Promise<{
-  category: "unit" | "common_area" | "mixed" | "uncertain";
-  confidence: number;
-}> {
-  if (!openai) return { category: "uncertain", confidence: 0 };
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Classify maintenance issue as unit, common_area, mixed, or uncertain. Reply ONLY JSON: {category, confidence}"
-        },
-        { role: "user", content: text }
-      ],
-      response_format: { type: "json_object" }
-    });
-
-    const raw = r.choices[0]?.message?.content;
-    const obj = typeof raw === "string" ? JSON.parse(raw) : {};
-
-    return {
-      category: obj.category ?? "uncertain",
-      confidence: Number(obj.confidence ?? 0)
-    };
-  } catch {
-    return { category: "uncertain", confidence: 0 };
-  }
-}
-
-/* ================= ✅ HELPER MALAYSIAN AI NORMALISER ================= */
-async function aiCleanDescription(text: string): Promise<string> {
-  if (!openai) return text;
-
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a Malaysian property maintenance assistant.
-
-Rewrite the issue into ONE short, clear maintenance sentence in English.
-
-Rules:
-- Remove filler words (lah, lor, leh, ah, eh).
-- Translate Malaysian slang / rojak into standard English.
-- Translate Malay / Chinese / Tamil words if present.
-- Keep ONLY the asset + problem + location if mentioned.
-- No emojis. No apologies. No extra words.
-- Do NOT guess causes. Do NOT add solutions.
-`
-        },
-        { role: "user", content: text }
-      ]
-    });
-
-    return r.choices[0]?.message?.content || text;
-  } catch {
-    return text;
-  }
-}
-
-/*=====================3. ✅ HELPER TEXT/MEDIA==========================*/
-
-/* ================= ✅ HELPER DETECT LANGUAGE ================= */
-function detectLanguage(text: string): "en" | "ms" | "zh" | "ta" {
-  const t = text.toLowerCase();
-
-  if (/[\u4e00-\u9fff]/.test(t)) return "zh"; // Chinese
-  if (/[\u0b80-\u0bff]/.test(t)) return "ta"; // Tamil
-
-  if (
-    t.includes("hai") ||
-    t.includes("selamat") ||
-    t.includes("terima kasih")
-  ) return "ms";
-
-  return "en";
-}
-
-/* ================= ✅ HELPER TRANSCRIPT CLEANER ================= */
-function cleanTranscript(text: string): string {
-  if (!text) return text;
-
-  let t = text.toLowerCase();
-
-  t = t.replace(
-    /\b(uh|um|erm|err|ah|eh|lah|lor|meh|macam|seperti|kinda|sort of)\b/g,
-    ""
-  );
-
-  t = t.replace(/\b(\w+)(\s+\1\b)+/g, "$1");
-  t = t.replace(/\s+/g, " ");
-
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-/* ================= ✅ HELPER TRANSCRIPTION ================= */
-async function transcribeVoice(mediaUrl: string): Promise<string | null> {
-  if (!openai) return null;
-
-  try {
-    const auth = Buffer.from(
-      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-    ).toString("base64");
-
-    const res = await fetch(mediaUrl, {
-      headers: { Authorization: `Basic ${auth}` }
-    });
-
-    if (!res.ok) return null;
-
-    const buffer = await res.arrayBuffer();
-
-    const file = await toFile(
-      Buffer.from(buffer),
-      "voice",
-      { type: res.headers.get("content-type") || "application/octet-stream" }
-    );
-
-    const transcript = await openai.audio.transcriptions.create({
-      file,
-      model: "whisper-1"
-    });
-
-    return transcript.text ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/* ================= 🔴✅ HELPER MESSAGE NORMALIZER ================= */
-async function normalizeIncomingMessage(body: any): Promise<string> {
-  let text: string = body.description_raw || "";
-
-  if (!text && body.voice_url) {
-    const transcript = await transcribeVoice(body.voice_url);
-    if (transcript) text = transcript;
-  }
-
-  if (!text && body.image_url) {
-    text = "Photo evidence provided. Issue description pending.";
-  }
-
-  return cleanTranscript(text);
-}
-
-/*=============== ✅ HELPER FORMAT INTENT LABEL ========================*/
-function formatIntentLabel(
-  intent: "unit" | "common_area" | "mixed" | "uncertain",
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const map = {
-    en: {
-      unit: "Unit",
-      common_area: "Common area",
-      mixed: "Unit & common area",
-      uncertain: "Uncertain"
-    },
-    ms: {
-      unit: "Unit kediaman",
-      common_area: "Kawasan bersama",
-      mixed: "Unit & kawasan bersama",
-      uncertain: "Tidak pasti"
-    },
-    zh: {
-      unit: "单位",
-      common_area: "公共区域",
-      mixed: "单位与公共区域",
-      uncertain: "不确定"
-    },
-    ta: {
-      unit: "தனிப்பட்ட யூனிட்",
-      common_area: "பொது பகுதி",
-      mixed: "யூனிட் மற்றும் பொது பகுதி",
-      uncertain: "தெளிவில்லை"
-    }
-  };
-
-  return map[lang][intent];
-}
-
-/*=====================4. ✅ HELPER REPLY BUILDER ==========================*/
-/* ================= 🆕 MAINTENANCE CATEGORY CONSTANTS ================= */
-
-// 🆕 NEW — MAINTENANCE CATEGORY TYPES
-type MaintenanceCategory =
-  | "electrical"
-  | "plumbing"
-  | "air_conditioning"
-  | "lighting"
-  | "sanitary"
-  | "door_window"
-  | "ceiling_wall"
-  | "flooring"
-  | "pest_control"
-  | "lift"
-  | "parking"
-  | "common_facility"
-  | "others";
-
-// 🆕 NEW — CATEGORY → DIAGNOSIS FEE (RM)
-const CATEGORY_DIAGNOSIS_FEE: Record<MaintenanceCategory, number> = {
-  electrical: 30,
-  plumbing: 30,
-  air_conditioning: 40,
-  lighting: 30,
-  sanitary: 30,
-  door_window: 30,
-  ceiling_wall: 30,
-  flooring: 30,
-  pest_control: 50,
-  lift: 0,
-  parking: 0,
-  common_facility: 0,
-  others: 30
-};
-
-
-/* =================✅ HELPER BANK GRADE REPLY GENERATOR ================= */
-function buildReplyText(
-  lang: "en" | "ms" | "zh" | "ta",
-  type:
-  | "greeting"
-  | "greeting_soft"
-  | "greeting_firm"
-  | "intake_received"
-  | "confirmed"
-  | "non_maintenance",
-  ticketId?: string,
-  descriptionDisplay?: string,
-  intentCategory?: "unit" | "common_area" | "mixed" | "uncertain"
-): string {
-  if (type === "greeting") {
-    switch (lang) {
-      case "zh":
-        return "您好！请简单描述需要报修的问题，例如：电梯故障、厨房水管漏水。谢谢。";
-      case "ta":
-        return "வணக்கம்! பராமரிப்பு பிரச்சனையை தெளிவாக விவரிக்கவும் (உதா: லிப்ட் வேலை செய்யவில்லை, குழாய் கசிவு). நன்றி.";
-      case "ms":
-        return "Hai! Sila terangkan masalah penyelenggaraan dengan ringkas (contoh: paip bocor, lif rosak). Terima kasih.";
-      default:
-        return "Hello! Please briefly describe the maintenance issue (e.g. leaking pipe, lift not working). Thank you.";
-    }
-  }
-
-if (type === "greeting_soft") {
-  switch (lang) {
-    case "ms":
-      return "Sekadar peringatan kecil 🙂\nSila terangkan masalah penyelenggaraan supaya kami boleh buka tiket untuk anda.";
-    case "zh":
-      return "小提醒一下 🙂\n请描述维修问题，以便我们为您创建工单。";
-    case "ta":
-      return "ஒரு சிறிய நினைவூட்டல் 🙂\nடிக்கெட் உருவாக்க, தயவுசெய்து பராமரிப்பு பிரச்சனையை விவரிக்கவும்.";
-    default:
-      return "Just a quick reminder 🙂\nPlease describe the maintenance issue so we can create a ticket for you.";
-  }
-}
-
-if (type === "greeting_firm") {
-  switch (lang) {
-    case "ms":
-      return "Untuk meneruskan, kami perlukan penerangan ringkas mengenai masalah penyelenggaraan.\nSelepas itu, kami akan uruskan selebihnya.";
-    case "zh":
-      return "要继续处理，我们需要您简要说明维修问题。\n收到后，我们将为您安排后续。";
-    case "ta":
-      return "தொடர, தயவுசெய்து பராமரிப்பு பிரச்சனையை சுருக்கமாக விளக்கவும்.\nமீதியைக் kami uruskan.";
-    default:
-      return "To proceed, we’ll need a brief description of the maintenance issue.\nOnce received, we’ll take care of the rest.";
-  }
-}
-
-if (type === "intake_received") {
-  const intentLabel = intentCategory
-  ? formatIntentLabel(intentCategory, lang)
-  : null;
-
-  const issue = descriptionDisplay
-    ? `"${descriptionDisplay}"`
-    : "";
-
-  switch (lang) {
-    case "zh":
-      return `🛠 维修工单已记录。
-我们理解您的问题是关于 ${issue}
-
-${intentLabel ? `Category: ${intentLabel}\n` : ""}
-
-请回复：
-1️⃣ 确认工单
-2️⃣ 编辑描述
-3️⃣ 取消工单`;
-
-    case "ta":
-      return `🛠 பராமரிப்பு டிக்கெட் பதிவு செய்யப்பட்டது.
-உங்கள் பிரச்சனை ${issue} தொடர்புடையது என்பதை நாங்கள் புரிந்துகொள்கிறோம்.
-
-${intentLabel ? `வகை: ${intentLabel}\n` : ""}
-
-பதில்:
-1️⃣ டிக்கெட்டை உறுதி செய்ய
-2️⃣ விளக்கத்தை திருத்த
-3️⃣ டிக்கெட்டை ரத்து செய்ய`;
-
-    case "ms":
-      return `🛠 Laporan penyelenggaraan telah direkodkan.
-Kami memahami bahawa isu anda berkaitan ${issue}
-
-${intentLabel ? `Kategori: ${intentLabel}\n` : ""}
-
-Sila balas:
-1️⃣ Sahkan tiket
-2️⃣ Edit keterangan
-3️⃣ Batalkan tiket`;
-
-    default:
-      return `🛠 Maintenance ticket recorded.
-We understand that your issue relates to ${issue}
-
-${intentLabel ? `Category: ${intentLabel}\n` : ""}
-
-Please reply:
-1️⃣ Confirm ticket
-2️⃣ Edit description
-3️⃣ Cancel ticket`;
-  }
-}
-
-  if (type === "non_maintenance") {
-  switch (lang) {
-    case "ms":
-      return (
-        "Terima kasih atas mesej anda 😊\n\n" +
-        "Kami mengesan bahawa mesej ini mungkin **bukan isu penyelenggaraan**.\n\n" +
-        "Contoh isu yang boleh dilaporkan:\n" +
-        "• Paip bocor\n" +
-        "• Lif rosak\n" +
-        "• Lampu tidak menyala\n\n" +
-        "Sila hantar masalah penyelenggaraan berkaitan unit atau kawasan bersama. Terima kasih!"
-      );
-
-    case "zh":
-      return (
-        "谢谢您的信息 😊\n\n" +
-        "我们发现这条信息**可能不是维修相关问题**。\n\n" +
-        "可提交的维修示例：\n" +
-        "• 水管漏水\n" +
-        "• 电梯故障\n" +
-        "• 灯不亮\n\n" +
-        "请重新发送与房屋或公共区域维修相关的问题。谢谢！"
-      );
-
-    case "ta":
-      return (
-        "உங்கள் செய்திக்கு நன்றி 😊\n\n" +
-        "இது **பராமரிப்பு சம்பந்தமான பிரச்சனை அல்ல** என்று தோன்றுகிறது.\n\n" +
-        "உதாரணமாக அனுப்பக்கூடிய பிரச்சனைகள்:\n" +
-        "• குழாய் கசிவு\n" +
-        "• லிப்ட் பழுது\n" +
-        "• விளக்கு எரியவில்லை\n\n" +
-        "தயவுசெய்து பராமரிப்பு தொடர்பான பிரச்சனையை அனுப்பவும். நன்றி!"
-      );
-
-    default:
-      return (
-        "Thanks for your message 😊\n\n" +
-        "It looks like this may **not be a maintenance-related issue**.\n\n" +
-        "Examples of accepted issues:\n" +
-        "• Leaking pipe\n" +
-        "• Lift not working\n" +
-        "• Light not functioning\n\n" +
-        "Please send a maintenance issue related to your unit or common area. Thank you!"
-      );
-  }
-}
-
-  // confirmed
-  switch (lang) {
-    case "zh":
-      return `感谢您的反馈。维修工单已创建。\n工单编号: ${ticketId}`;
-    case "ta":
-      return `உங்கள் புகார் பதிவு செய்யப்பட்டது.\nடிக்கெட் எண்: ${ticketId}`;
-    case "ms":
-      return `Terima kasih. Laporan penyelenggaraan telah diterima.\nNo Tiket: ${ticketId}`;
-    default:
-      return `Thank you. Your maintenance report has been received.\nTicket ID: ${ticketId}`;
-  }
-}
-
-/* ================= ✅ HELPER FOLLOW-UP REPLY TEXT ================= */
-function buildFollowUpReply(
-  lang: "en" | "ms" | "zh" | "ta",
-  type:
-    | "confirm_success"
-    | "ask_edit"
-    | "cancelled"
-    | "invalid_confirm"
-): string {
-  switch (type) {
-    case "confirm_success":
-      switch (lang) {
-        case "ms":
-          return "✅ Tiket disahkan.\nYuran pemeriksaan: RM30.";
-        case "zh":
-          return "✅ 工单已确认。\n检查费用：RM30.";
-        case "ta":
-          return "✅ டிக்கெட் உறுதிப்படுத்தப்பட்டது.\nசோதனை கட்டணம்: RM30.";
-        default:
-          return "✅ Ticket confirmed.\nDiagnosis fee: RM30.";
-      }
-
-    case "ask_edit":
-      switch (lang) {
-        case "ms":
-          return "✏️ Sila balas dengan penerangan isu yang dikemaskini.";
-        case "zh":
-          return "✏️ 请回复更新后的问题描述。";
-        case "ta":
-          return "✏️ தயவுசெய்து திருத்தப்பட்ட பிரச்சனை விளக்கத்தை அனுப்பவும்.";
-        default:
-          return "✏️ Please reply with the corrected issue description.";
-      }
-
-    case "cancelled":
-      switch (lang) {
-        case "ms":
-          return "❌ Tiket telah dibatalkan.";
-        case "zh":
-          return "❌ 工单已取消。";
-        case "ta":
-          return "❌ டிக்கெட் ரத்து செய்யப்பட்டது.";
-        default:
-          return "❌ Ticket cancelled.";
-      }
-
-    case "invalid_confirm":
-      switch (lang) {
-        case "ms":
-          return "Sila balas dengan 1, 2 atau 3 sahaja.";
-        case "zh":
-          return "请仅回复 1、2 或 3。";
-        case "ta":
-          return "1, 2 அல்லது 3 மட்டுமே பதிலளிக்கவும்.";
-        default:
-          return "Please reply with 1, 2, or 3 only.";
-      }
-  }
-}
-
-/*===================== ✅ HELPER NORMALIZE PHONE ===============================*/
-export function normalizeWhatsappPhone(input?: string | null): string | null {
-  if (!input) return null;
-
-  let p = input.toString().trim();
-
-  // Remove Twilio / WhatsApp prefix
-  p = p.replace(/^whatsapp:/i, "");
-
-  // Remove spaces, dashes, brackets
-  p = p.replace(/[^\d+]/g, "");
-
-  // Ensure leading +
-  if (!p.startsWith("+")) {
-    // Assume Malaysia if missing country code
-    if (p.startsWith("0")) {
-      p = "+6" + p;
-    } else if (p.startsWith("60")) {
-      p = "+" + p;
-    } else {
-      // Fallback (do not guess too hard)
-      p = "+" + p;
-    }
-  }
-
-  return p;
-}
-
-/*===================== ✅ HELPER WORKING DAY & SLOT ===============================*/
-// 🆕 NEW — PUBLIC HOLIDAYS (YYYY-MM-DD, extend as needed)
-const PUBLIC_HOLIDAYS = [
-  "2026-01-01",
-  "2026-02-01"
-];
-
-// 🆕 NEW
-function isSunday(date: Date) {
-  return date.getDay() === 0;
-}
-
-// 🆕 NEW
-function isPublicHoliday(date: Date) {
-  const ymd = date.toISOString().slice(0, 10);
-  return PUBLIC_HOLIDAYS.includes(ymd);
-}
-
-// 🆕 NEW — NEXT WORKING DAY (EXCLUDE SUNDAY & PH)
-function getNextWorkingDay(from = new Date()) {
-  const d = new Date(from);
-  d.setDate(d.getDate() + 1);
-
-  while (isSunday(d) || isPublicHoliday(d)) {
-    d.setDate(d.getDate() + 1);
-  }
-
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-// 🆕 NEW — BUILD 3 FIXED SLOTS
-function buildSlots(date: Date) {
-  const base = new Date(date);
-
-  const s1 = new Date(base); s1.setHours(9, 0, 0, 0);
-  const e1 = new Date(base); e1.setHours(12, 0, 0, 0);
-
-  const s2 = new Date(base); s2.setHours(12, 0, 0, 0);
-  const e2 = new Date(base); e2.setHours(15, 0, 0, 0);
-
-  const s3 = new Date(base); s3.setHours(15, 0, 0, 0);
-  const e3 = new Date(base); e3.setHours(18, 0, 0, 0);
-
-  return [
-    { start: s1, end: e1 },
-    { start: s2, end: e2 },
-    { start: s3, end: e3 }
-  ];
-}
-
-/* ================= ✅ HELPER REFUND ================= */
-
-// 🆕 NEW
-async function processRefund(ticketId: string) {
-  await supabase
-    .from("tickets")
-    .update({
-      refund_status: "processed",
-      refunded_at: new Date(),
-      refund_reason: "NO_CONTRACTOR_AVAILABLE",
-      processed_by: "system"
-    })
-    .eq("id", ticketId);
-}
-
-/* ================= ✅ HELPER once ================= */
-function normalizeText(input: unknown): string {
-  if (typeof input !== "string") return "";
-  return input.trim();
-}
-
-/* ================= ✅ HELPER localize date ================= */
-function formatDateForLang(
-  date: Date,
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const localeMap: Record<typeof lang, string> = {
-    en: "en-GB",
-    ms: "ms-MY",
-    zh: "zh-CN",
-    ta: "ta-IN"
-  };
-
-  return date.toLocaleDateString(localeMap[lang], {
-    weekday: "long",
-    day: "numeric",
-    month: "short",
-    year: "numeric"
-  });
-}
-
-/* ================= ✅ HELPER FORMAT MAINTENANCE CATEGORY ================= */
-function formatMaintenanceCategory(
-  category: MaintenanceCategory,
-  lang: "en" | "ms" | "zh" | "ta"
-): string {
-  const map: Record<
-    "en" | "ms" | "zh" | "ta",
-    Record<MaintenanceCategory, string>
-  > = {
-    en: {
-      electrical: "Electrical",
-      plumbing: "Plumbing",
-      air_conditioning: "Air conditioning",
-      lighting: "Lighting",
-      sanitary: "Sanitary",
-      door_window: "Door / Window",
-      ceiling_wall: "Ceiling / Wall",
-      flooring: "Flooring",
-      pest_control: "Pest control",
-      lift: "Lift",
-      parking: "Parking",
-      common_facility: "Common facility",
-      others: "Others"
-    },
-    ms: {
-      electrical: "Elektrik",
-      plumbing: "Paip",
-      air_conditioning: "Penyaman udara",
-      lighting: "Lampu",
-      sanitary: "Sanitari",
-      door_window: "Pintu / Tingkap",
-      ceiling_wall: "Siling / Dinding",
-      flooring: "Lantai",
-      pest_control: "Kawalan perosak",
-      lift: "Lif",
-      parking: "Tempat letak kereta",
-      common_facility: "Kemudahan bersama",
-      others: "Lain-lain"
-    },
-    zh: {
-      electrical: "电气",
-      plumbing: "水管",
-      air_conditioning: "空调",
-      lighting: "照明",
-      sanitary: "卫生设施",
-      door_window: "门 / 窗",
-      ceiling_wall: "天花板 / 墙壁",
-      flooring: "地板",
-      pest_control: "害虫控制",
-      lift: "电梯",
-      parking: "停车场",
-      common_facility: "公共设施",
-      others: "其他"
-    },
-    ta: {
-      electrical: "மின்சாரம்",
-      plumbing: "குழாய்",
-      air_conditioning: "குளிரூட்டி",
-      lighting: "விளக்கு",
-      sanitary: "சுகாதாரம்",
-      door_window: "கதவு / ஜன்னல்",
-      ceiling_wall: "மேல்தளம் / சுவர்",
-      flooring: "தரை",
-      pest_control: "பூச்சி கட்டுப்பாடு",
-      lift: "லிப்ட்",
-      parking: "வாகன நிறுத்தம்",
-      common_facility: "பொது வசதி",
-      others: "மற்றவை"
-    }
-  };
-
-  return map[lang][category] ?? category;
-}
-
-/*====================================================*/
 
