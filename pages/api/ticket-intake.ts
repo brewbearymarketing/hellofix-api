@@ -1194,10 +1194,9 @@ if (activeTicket && activeTicket.status === "awaiting_payment") {
 if (
   activeTicket &&
   terminalStatuses.includes(activeTicket.status) &&
-  effectiveSession?.state !== "intake_v2" &&
-  effectiveSession?.expected_input !== "type_description"
-)
- {
+  effectiveSession?.current_ticket_id === activeTicket.id && // 🔒 CRITICAL
+  effectiveSession?.state !== "intake_v2"
+) {
 
     await supabase
       .from("conversation_sessions")
@@ -1978,7 +1977,7 @@ if (!hasMeaningfulIntent) {
   await supabase
     .from("conversation_sessions")
     .update({
-      state: "intake",
+      state: "intake_v2",
       current_ticket_id: null,
       expected_input: "type_description",
       updated_at: new Date()
