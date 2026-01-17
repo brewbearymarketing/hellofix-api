@@ -1972,6 +1972,7 @@ return intakeEngine(req, res, {
   console.error("🔥 CORE HANDLER ERROR:", err);
   return res.status(500).json({ success: false });
 }
+}
 
 /* =========================================================================== ✅ INTAKE ENGINE (TICKET CREATION ONLY) ========================================================================================= */
 async function intakeEngine(
@@ -2201,4 +2202,5 @@ const description_display =
       error: "Internal Server Error",
       detail: err.message
    });
+  }
 }
