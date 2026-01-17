@@ -1260,13 +1260,15 @@ async function handleSecondIntake(
   ===================================================== */
   const meaningful = await aiIsMeaningfulIssue(text);
 
-return res.status(200).json({
-  success: true,
-  reply_text:
-    lang === "ms"
-      ? "Sila terangkan masalah penyelenggaraan yang baharu."
-      : "Please describe the new maintenance issue."
-});
+if (!meaningful) {
+    return res.status(200).json({
+      success: true,
+      reply_text:
+        lang === "ms"
+          ? "Sila terangkan masalah penyelenggaraan yang baharu."
+          : "Please describe the new maintenance issue."
+    });
+  }
 
   /* =====================================================
      ✅ VALID SECOND TICKET DESCRIPTION
