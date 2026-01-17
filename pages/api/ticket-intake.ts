@@ -1288,12 +1288,9 @@ if (!meaningful) {
      🔁 RE-ENTER CORE HANDLER SAFELY
      (single source of truth)
   ===================================================== */
-  return coreHandler(req, res, {
+ return coreHandler(req, res, {
   ...req.body,
-  payload: {
-    ...req.body.payload,
-    description_raw: text
-  }
+  description_raw: text
 });
 }
 
