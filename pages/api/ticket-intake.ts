@@ -1968,6 +1968,10 @@ return intakeEngine(req, res, {
   mode: "whatsapp"
 });
 }
+} catch (err: any) {
+  console.error("🔥 CORE HANDLER ERROR:", err);
+  return res.status(500).json({ success: false });
+}
 
 /* =========================================================================== ✅ INTAKE ENGINE (TICKET CREATION ONLY) ========================================================================================= */
 async function intakeEngine(
